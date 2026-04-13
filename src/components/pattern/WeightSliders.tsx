@@ -7,12 +7,14 @@ interface WeightSlidersProps {
 
 const LABELS: Record<keyof PatternWeights, string> = {
   depth: 'Depth',
+  depthChange: 'Structure Transition',
   slope: 'Bottom Slope',
   dropoffProximity: 'Drop-off Proximity',
   channelProximity: 'Channel Proximity',
   pointProximity: 'Point Proximity',
   shorelineDistance: 'Shoreline Distance',
   windExposure: 'Wind Exposure',
+  windAdvantage: 'Wind Advantage',
   timeOfDay: 'Time of Day',
   season: 'Season',
   moonPhase: 'Moon Phase',

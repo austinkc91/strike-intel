@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { PhotoImport } from './PhotoImport';
-import type { CatchFormData, GeoPoint } from '../../types';
+import type { Catch, CatchFormData, GeoPoint } from '../../types';
 
 const COMMON_SPECIES = [
   'Largemouth Bass',
@@ -21,6 +21,7 @@ const COMMON_SPECIES = [
 interface LogCatchFormProps {
   initialLocation: GeoPoint | null;
   initialTimestamp: Date | null;
+  editCatch?: Catch | null;
   onSubmit: (data: CatchFormData) => Promise<void>;
   onCancel: () => void;
 }
@@ -28,16 +29,17 @@ interface LogCatchFormProps {
 export function LogCatchForm({
   initialLocation,
   initialTimestamp,
+  editCatch,
   onSubmit,
   onCancel,
 }: LogCatchFormProps) {
-  const [location, setLocation] = useState<GeoPoint | null>(initialLocation);
-  const [timestamp, setTimestamp] = useState<Date>(initialTimestamp || new Date());
-  const [species, setSpecies] = useState('');
-  const [weight, setWeight] = useState('');
-  const [length, setLength] = useState('');
-  const [lure, setLure] = useState('');
-  const [notes, setNotes] = useState('');
+  const [location, setLocation] = useState<GeoPoint | null>(editCatch?.location ?? initialLocation);
+  const [timestamp, setTimestamp] = useState<Date>(editCatch?.timestamp?.toDate?.() ?? initialTimestamp ?? new Date());
+  const [species, setSpecies] = useState(editCatch?.species ?? '');
+  const [weight, setWeight] = useState(editCatch?.weight_lbs?.toString() ?? '');
+  const [length, setLength] = useState(editCatch?.length_in?.toString() ?? '');
+  const [lure, setLure] = useState(editCatch?.lure ?? '');
+  const [notes, setNotes] = useState(editCatch?.notes ?? '');
   const [photo, setPhoto] = useState<File | null>(null);
   const [photoSource, setPhotoSource] = useState<'camera' | 'import' | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -93,7 +95,7 @@ export function LogCatchForm({
       <div className="bottom-sheet-handle" />
       <form onSubmit={handleSubmit}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-          <h3 style={{ fontSize: 18, fontWeight: 600 }}>Log a Catch</h3>
+          <h3 style={{ fontSize: 18, fontWeight: 600 }}>{editCatch ? 'Edit Catch' : 'Log a Catch'}</h3>
           <button type="button" onClick={onCancel} style={{ background: 'none', color: 'var(--color-text-secondary)', fontSize: 14 }}>
             Cancel
           </button>

@@ -9,7 +9,7 @@ import {
   findSimilarSpots,
   buildSignature,
   computeNormRanges,
-  DEFAULT_WEIGHTS,
+  getSpeciesWeights,
   type GridCell,
   type MatchResult,
 } from '../../services/patternEngine';
@@ -85,8 +85,8 @@ export function TripPlanPanel({
           targetDate,
           moon.illumination,
           ranges,
-          DEFAULT_WEIGHTS,
-          0.65,
+          getSpeciesWeights(refCatch.species),
+          0.8,
         );
 
         setResults(matches);

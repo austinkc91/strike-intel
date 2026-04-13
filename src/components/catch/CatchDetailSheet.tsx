@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { Catch } from '../../types';
 import { WeatherBadge } from '../weather/WeatherBadge';
 import { SolunarTimeline } from '../weather/SolunarTimeline';
@@ -8,9 +9,12 @@ interface CatchDetailSheetProps {
   catchData: Catch;
   onClose: () => void;
   onFindSimilar: (c: Catch) => void;
+  onEdit: (c: Catch) => void;
+  onDelete: (c: Catch) => void;
 }
 
-export function CatchDetailSheet({ catchData, onClose, onFindSimilar }: CatchDetailSheetProps) {
+export function CatchDetailSheet({ catchData, onClose, onFindSimilar, onEdit, onDelete }: CatchDetailSheetProps) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const timestamp = catchData.timestamp?.toDate?.() || new Date();
   const moon = getMoonPhase(timestamp);
   const solunar = getSolunarWindows(timestamp, catchData.location.latitude);
@@ -124,14 +128,95 @@ export function CatchDetailSheet({ catchData, onClose, onFindSimilar }: CatchDet
         </div>
       )}
 
+      {/* Spot characteristics */}
+      {catchData.characteristics && (
+        <div style={{
+          marginBottom: 12,
+          padding: '8px 12px',
+          background: 'var(--color-bg)',
+          borderRadius: 'var(--radius)',
+          fontSize: 12,
+        }}>
+          <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>
+            Spot Data
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 12px' }}>
+            {catchData.characteristics.depth_ft != null && (
+              <span>Depth: {catchData.characteristics.depth_ft}ft</span>
+            )}
+            {catchData.characteristics.slope_degrees != null && (
+              <span>Slope: {catchData.characteristics.slope_degrees}&deg;</span>
+            )}
+            {catchData.characteristics.nearestStructureType && (
+              <span>Structure: {catchData.characteristics.nearestStructureType}</span>
+            )}
+            {catchData.characteristics.channelProximity != null && (
+              <span>Channel: {catchData.characteristics.channelProximity}ft</span>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Find Similar Spots button */}
       <button
         className="btn btn-accent"
-        style={{ width: '100%' }}
+        style={{ width: '100%', marginBottom: 8 }}
         onClick={() => onFindSimilar(catchData)}
       >
         Find Similar Spots
       </button>
+
+      {/* Edit / Delete */}
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button
+          onClick={() => onEdit(catchData)}
+          style={{
+            flex: 1,
+            padding: '10px 12px',
+            background: 'var(--color-bg)',
+            border: '1px solid var(--color-border)',
+            borderRadius: 'var(--radius)',
+            color: 'var(--color-text)',
+            fontSize: 13,
+            fontWeight: 500,
+          }}
+        >
+          Edit
+        </button>
+        {!confirmDelete ? (
+          <button
+            onClick={() => setConfirmDelete(true)}
+            style={{
+              flex: 1,
+              padding: '10px 12px',
+              background: 'rgba(244, 67, 54, 0.1)',
+              border: '1px solid rgba(244, 67, 54, 0.3)',
+              borderRadius: 'var(--radius)',
+              color: '#f44336',
+              fontSize: 13,
+              fontWeight: 500,
+            }}
+          >
+            Delete
+          </button>
+        ) : (
+          <button
+            onClick={() => onDelete(catchData)}
+            style={{
+              flex: 1,
+              padding: '10px 12px',
+              background: '#f44336',
+              border: '1px solid #f44336',
+              borderRadius: 'var(--radius)',
+              color: '#fff',
+              fontSize: 13,
+              fontWeight: 600,
+            }}
+          >
+            Confirm Delete
+          </button>
+        )}
+      </div>
     </div>
   );
 }

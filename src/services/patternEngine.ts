@@ -4,14 +4,20 @@
 
 import { getWindExposureForDirection } from './windExposure';
 
+// ============================================================
+// Types
+// ============================================================
+
 export interface SpotSignature {
   depth: number;              // 0-1 normalized
+  depthChange: number;        // 0-1 — how much depth changes nearby (structure transition)
   slope: number;              // 0-1 normalized
   dropoffProximity: number;   // 0-1 (1 = closest)
   channelProximity: number;   // 0-1
   pointProximity: number;     // 0-1
   shorelineDistance: number;   // 0-1
   windExposure: number;       // 0-1
+  windAdvantage: number;      // 0-1 — windward shore bonus (bait pushed here)
   timeOfDay: number;          // 0-1
   season: number;             // 0-1
   moonPhase: number;          // 0-1 (illumination)
@@ -19,12 +25,14 @@ export interface SpotSignature {
 
 export interface PatternWeights {
   depth: number;
+  depthChange: number;
   slope: number;
   dropoffProximity: number;
   channelProximity: number;
   pointProximity: number;
   shorelineDistance: number;
   windExposure: number;
+  windAdvantage: number;
   timeOfDay: number;
   season: number;
   moonPhase: number;
@@ -32,16 +40,136 @@ export interface PatternWeights {
 
 export const DEFAULT_WEIGHTS: PatternWeights = {
   depth: 1.0,
+  depthChange: 0.8,
   slope: 0.7,
   dropoffProximity: 0.9,
   channelProximity: 0.6,
   pointProximity: 0.5,
   shorelineDistance: 0.4,
-  windExposure: 0.8,
+  windExposure: 0.6,
+  windAdvantage: 0.7,
   timeOfDay: 0.3,
   season: 0.5,
   moonPhase: 0.2,
 };
+
+// ============================================================
+// Species-specific weight profiles
+// ============================================================
+
+export const SPECIES_WEIGHTS: Record<string, Partial<PatternWeights>> = {
+  'Largemouth Bass': {
+    depth: 0.8,
+    depthChange: 1.0,
+    slope: 0.8,
+    dropoffProximity: 1.0,
+    channelProximity: 0.4,
+    pointProximity: 0.9,
+    shorelineDistance: 0.7,
+    windExposure: 0.5,
+    windAdvantage: 0.8,
+  },
+  'Smallmouth Bass': {
+    depth: 0.9,
+    depthChange: 1.0,
+    slope: 0.9,
+    dropoffProximity: 1.0,
+    channelProximity: 0.5,
+    pointProximity: 0.8,
+    shorelineDistance: 0.5,
+    windExposure: 0.6,
+    windAdvantage: 0.7,
+  },
+  'Striped Bass': {
+    depth: 1.0,
+    depthChange: 0.7,
+    slope: 0.4,
+    dropoffProximity: 0.6,
+    channelProximity: 1.0,
+    pointProximity: 0.3,
+    shorelineDistance: 0.2,
+    windExposure: 0.8,
+    windAdvantage: 0.6,
+  },
+  'Walleye': {
+    depth: 1.0,
+    depthChange: 0.9,
+    slope: 0.6,
+    dropoffProximity: 0.8,
+    channelProximity: 0.7,
+    pointProximity: 0.6,
+    shorelineDistance: 0.3,
+    windExposure: 0.7,
+    windAdvantage: 0.8,
+  },
+  'Crappie': {
+    depth: 0.9,
+    depthChange: 0.6,
+    slope: 0.3,
+    dropoffProximity: 0.5,
+    channelProximity: 0.7,
+    pointProximity: 0.4,
+    shorelineDistance: 0.6,
+    windExposure: 0.3,
+    windAdvantage: 0.4,
+  },
+  'Channel Catfish': {
+    depth: 0.8,
+    depthChange: 0.5,
+    slope: 0.3,
+    dropoffProximity: 0.4,
+    channelProximity: 1.0,
+    pointProximity: 0.2,
+    shorelineDistance: 0.3,
+    windExposure: 0.4,
+    windAdvantage: 0.3,
+  },
+  'Bluegill': {
+    depth: 0.6,
+    depthChange: 0.4,
+    slope: 0.3,
+    dropoffProximity: 0.3,
+    channelProximity: 0.2,
+    pointProximity: 0.5,
+    shorelineDistance: 0.9,
+    windExposure: 0.3,
+    windAdvantage: 0.5,
+  },
+};
+
+export function getSpeciesWeights(species: string | null): PatternWeights {
+  const overrides = species ? SPECIES_WEIGHTS[species] : undefined;
+  if (!overrides) return { ...DEFAULT_WEIGHTS };
+  return { ...DEFAULT_WEIGHTS, ...overrides };
+}
+
+// ============================================================
+// Time-of-day depth adjustment
+// ============================================================
+
+/**
+ * Fish move shallower at dawn/dusk and deeper midday.
+ * Returns a multiplier to adjust the target depth comparison.
+ * < 1 = fish are shallower than recorded, > 1 = deeper.
+ */
+function timeDepthFactor(hour: number): number {
+  // Dawn (5-7): fish shallow → factor 0.7
+  // Morning (7-10): transitioning → factor 0.85
+  // Midday (10-15): deep → factor 1.15
+  // Afternoon (15-18): transitioning → factor 0.9
+  // Dusk (18-20): fish shallow → factor 0.7
+  // Night (20-5): variable → factor 0.9
+  if (hour >= 5 && hour < 7) return 0.7;
+  if (hour >= 7 && hour < 10) return 0.85;
+  if (hour >= 10 && hour < 15) return 1.15;
+  if (hour >= 15 && hour < 18) return 0.9;
+  if (hour >= 18 && hour < 20) return 0.7;
+  return 0.9;
+}
+
+// ============================================================
+// Grid cell type
+// ============================================================
 
 export interface GridCell {
   id: number;
@@ -53,18 +181,17 @@ export interface GridCell {
   channelDist_ft: number;
   pointDist_ft: number;
   shorelineDist_ft: number;
-  windExposure8: Record<string, number>; // pre-computed for 8 directions
+  windExposure8: Record<string, number>;
 }
 
 export interface MatchResult {
   cellId: number;
   lng: number;
   lat: number;
-  score: number;      // 0-1 where 1 = identical
+  score: number;
   signature: SpotSignature;
 }
 
-// Normalization ranges (set per lake)
 export interface NormRanges {
   maxDepth: number;
   maxSlope: number;
@@ -72,7 +199,12 @@ export interface NormRanges {
   maxChannelDist: number;
   maxPointDist: number;
   maxShorelineDist: number;
+  maxDepthChange: number;
 }
+
+// ============================================================
+// Normalization
+// ============================================================
 
 function normalize(value: number, max: number): number {
   if (max <= 0) return 0.5;
@@ -80,22 +212,81 @@ function normalize(value: number, max: number): number {
 }
 
 function inverseNormalize(value: number, max: number): number {
-  // Closer = higher score
   return 1 - normalize(value, max);
 }
 
 function timeOfDayNorm(date: Date): number {
-  const hours = date.getHours() + date.getMinutes() / 60;
-  return hours / 24;
+  return (date.getHours() + date.getMinutes() / 60) / 24;
 }
 
 function seasonNorm(date: Date): number {
-  const month = date.getMonth(); // 0-11
-  // 0=winter, 0.25=spring, 0.5=summer, 0.75=fall
-  return month / 12;
+  return date.getMonth() / 12;
 }
 
-// Build a spot signature from raw values
+// ============================================================
+// Depth change computation — structure transition metric
+// ============================================================
+
+/**
+ * Compute how much depth changes around a cell by looking at neighbors.
+ * High value = near a structure transition (ledge, dropoff, hump edge).
+ */
+function computeDepthChange(
+  cell: GridCell,
+  depthLookup: Map<string, number>,
+  spacing: number,
+): number {
+  let maxChange = 0;
+  const offsets = [
+    [0, spacing], [0, -spacing], [spacing, 0], [-spacing, 0],
+    [spacing, spacing], [-spacing, spacing], [spacing, -spacing], [-spacing, -spacing],
+  ];
+  for (const [dlng, dlat] of offsets) {
+    const key = `${(cell.lat + dlat).toFixed(3)}_${(cell.lng + dlng).toFixed(3)}`;
+    const neighborDepth = depthLookup.get(key);
+    if (neighborDepth !== undefined) {
+      maxChange = Math.max(maxChange, Math.abs(cell.depth_ft - neighborDepth));
+    }
+  }
+  return maxChange;
+}
+
+// ============================================================
+// Wind advantage scoring
+// ============================================================
+
+/**
+ * Score how advantageous the current wind is for this spot.
+ * Windward shores (wind blowing INTO the shore) score higher —
+ * wind pushes baitfish and creates current that attracts predators.
+ */
+function computeWindAdvantage(
+  windDeg: number,
+  windExposure8: Record<string, number>,
+  shorelineDist_ft: number,
+  maxShorelineDist: number,
+): number {
+  // Get exposure from the wind direction (how much open water upwind)
+  const upwindExposure = getWindExposureForDirection(windDeg, windExposure8);
+  // Get exposure from the lee side (downwind)
+  const downwindDeg = (windDeg + 180) % 360;
+  const downwindExposure = getWindExposureForDirection(downwindDeg, windExposure8);
+
+  // Windward advantage: high upwind fetch + low downwind fetch = wind hitting shore
+  // This means bait gets pushed into this area
+  const windwardScore = upwindExposure * (1 - downwindExposure);
+
+  // Closer to shore amplifies the wind effect
+  const shoreBonus = 1 - normalize(shorelineDist_ft, maxShorelineDist);
+  const amplified = windwardScore * (0.5 + 0.5 * shoreBonus);
+
+  return Math.min(1, amplified);
+}
+
+// ============================================================
+// Signature building
+// ============================================================
+
 export function buildSignature(
   depth_ft: number,
   slope_deg: number,
@@ -107,54 +298,70 @@ export function buildSignature(
   timestamp: Date,
   moonIllumination: number,
   ranges: NormRanges,
+  depthChange_ft: number = 0,
+  windAdvantage: number = 0.5,
 ): SpotSignature {
   return {
     depth: normalize(depth_ft, ranges.maxDepth),
+    depthChange: normalize(depthChange_ft, ranges.maxDepthChange),
     slope: normalize(slope_deg, ranges.maxSlope),
     dropoffProximity: inverseNormalize(dropoffDist_ft, ranges.maxDropoffDist),
     channelProximity: inverseNormalize(channelDist_ft, ranges.maxChannelDist),
     pointProximity: inverseNormalize(pointDist_ft, ranges.maxPointDist),
     shorelineDistance: normalize(shorelineDist_ft, ranges.maxShorelineDist),
     windExposure,
+    windAdvantage,
     timeOfDay: timeOfDayNorm(timestamp),
     season: seasonNorm(timestamp),
     moonPhase: moonIllumination,
   };
 }
 
-// Build a signature for a grid cell
 export function buildCellSignature(
   cell: GridCell,
   windDeg: number,
   timestamp: Date,
   moonIllumination: number,
   ranges: NormRanges,
+  depthChangeLookup: Map<number, number>,
 ): SpotSignature {
   const windExp = getWindExposureForDirection(windDeg, cell.windExposure8);
+  const depthChange = depthChangeLookup.get(cell.id) ?? 0;
+  const windAdv = computeWindAdvantage(windDeg, cell.windExposure8, cell.shorelineDist_ft, ranges.maxShorelineDist);
+
+  // Time-of-day depth adjustment: compare cell depth against
+  // where fish would be at this time vs the catch time
+  const hour = timestamp.getHours();
+  const timeFactor = timeDepthFactor(hour);
 
   return {
-    depth: normalize(cell.depth_ft, ranges.maxDepth),
+    depth: normalize(cell.depth_ft * timeFactor, ranges.maxDepth),
+    depthChange: normalize(depthChange, ranges.maxDepthChange),
     slope: normalize(cell.slope_deg, ranges.maxSlope),
     dropoffProximity: inverseNormalize(cell.dropoffDist_ft, ranges.maxDropoffDist),
     channelProximity: inverseNormalize(cell.channelDist_ft, ranges.maxChannelDist),
     pointProximity: inverseNormalize(cell.pointDist_ft, ranges.maxPointDist),
     shorelineDistance: normalize(cell.shorelineDist_ft, ranges.maxShorelineDist),
     windExposure: windExp,
+    windAdvantage: windAdv,
     timeOfDay: timeOfDayNorm(timestamp),
     season: seasonNorm(timestamp),
     moonPhase: moonIllumination,
   };
 }
 
-// Core similarity scoring: weighted Euclidean distance
+// ============================================================
+// Similarity scoring
+// ============================================================
+
 export function similarityScore(
   reference: SpotSignature,
   candidate: SpotSignature,
   weights: PatternWeights,
 ): number {
   const dims: (keyof SpotSignature)[] = [
-    'depth', 'slope', 'dropoffProximity', 'channelProximity',
-    'pointProximity', 'shorelineDistance', 'windExposure',
+    'depth', 'depthChange', 'slope', 'dropoffProximity', 'channelProximity',
+    'pointProximity', 'shorelineDistance', 'windExposure', 'windAdvantage',
     'timeOfDay', 'season', 'moonPhase',
   ];
 
@@ -169,12 +376,13 @@ export function similarityScore(
   }
 
   if (totalWeight === 0) return 0;
-
-  // 1 = identical, 0 = maximally different
   return 1 - Math.sqrt(sumSquared / totalWeight);
 }
 
-// Run pattern match across entire grid
+// ============================================================
+// Main matching function
+// ============================================================
+
 export function findSimilarSpots(
   referenceSignature: SpotSignature,
   grid: GridCell[],
@@ -183,12 +391,26 @@ export function findSimilarSpots(
   moonIllumination: number,
   ranges: NormRanges,
   weights: PatternWeights = DEFAULT_WEIGHTS,
-  threshold: number = 0.7,
+  threshold: number = 0.85,
 ): MatchResult[] {
-  const results: MatchResult[] = [];
-
+  // Pre-compute depth change for all cells
+  const depthLookup = new Map<string, number>();
   for (const cell of grid) {
-    const cellSig = buildCellSignature(cell, windDeg, timestamp, moonIllumination, ranges);
+    depthLookup.set(`${cell.lat.toFixed(3)}_${cell.lng.toFixed(3)}`, cell.depth_ft);
+  }
+
+  const spacing = 0.002; // match grid resolution
+  const depthChangeLookup = new Map<number, number>();
+  for (const cell of grid) {
+    depthChangeLookup.set(cell.id, computeDepthChange(cell, depthLookup, spacing));
+  }
+
+  // Filter out very shallow cells (< 3ft) — not fishable
+  const fishableCells = grid.filter(c => c.depth_ft >= 3);
+
+  const results: MatchResult[] = [];
+  for (const cell of fishableCells) {
+    const cellSig = buildCellSignature(cell, windDeg, timestamp, moonIllumination, ranges, depthChangeLookup);
     const score = similarityScore(referenceSignature, cellSig, weights);
 
     if (score >= threshold) {
@@ -202,13 +424,28 @@ export function findSimilarSpots(
     }
   }
 
-  // Sort by score descending
   results.sort((a, b) => b.score - a.score);
   return results;
 }
 
-// Compute normalization ranges from a grid
+// ============================================================
+// Norm ranges (now includes depthChange)
+// ============================================================
+
 export function computeNormRanges(grid: GridCell[]): NormRanges {
+  // Estimate max depth change from the data
+  const depthLookup = new Map<string, number>();
+  for (const cell of grid) {
+    depthLookup.set(`${cell.lat.toFixed(3)}_${cell.lng.toFixed(3)}`, cell.depth_ft);
+  }
+
+  let maxDC = 1;
+  const spacing = 0.002;
+  for (const cell of grid) {
+    const dc = computeDepthChange(cell, depthLookup, spacing);
+    if (dc > maxDC) maxDC = dc;
+  }
+
   return {
     maxDepth: Math.max(1, ...grid.map((c) => c.depth_ft)),
     maxSlope: Math.max(1, ...grid.map((c) => c.slope_deg)),
@@ -216,114 +453,80 @@ export function computeNormRanges(grid: GridCell[]): NormRanges {
     maxChannelDist: Math.max(1, ...grid.map((c) => c.channelDist_ft)),
     maxPointDist: Math.max(1, ...grid.map((c) => c.pointDist_ft)),
     maxShorelineDist: Math.max(1, ...grid.map((c) => c.shorelineDist_ft)),
+    maxDepthChange: maxDC,
   };
 }
 
-// Seed-based pseudo-random for consistent results
-function seededRandom(x: number, y: number): number {
-  const n = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
-  return n - Math.floor(n);
+// ============================================================
+// Hotspot clustering (#10)
+// ============================================================
+
+export interface HotspotZone {
+  id: number;
+  centerLng: number;
+  centerLat: number;
+  avgScore: number;
+  topScore: number;
+  count: number;
+  radius_deg: number; // approximate zone radius
+  topResult: MatchResult;
 }
 
-// Generate a demo grid for testing with realistic lake-like depth data
-export function generateDemoGrid(
-  centerLng: number,
-  centerLat: number,
-  radiusDeg: number = 0.08,
-  spacing: number = 0.002,
-): GridCell[] {
-  const grid: GridCell[] = [];
-  let id = 0;
+/**
+ * Cluster individual match results into hotspot zones.
+ * Uses simple grid-based clustering — groups nearby results.
+ */
+export function clusterHotspots(
+  results: MatchResult[],
+  clusterRadius: number = 0.005, // ~500m
+): HotspotZone[] {
+  if (results.length === 0) return [];
 
-  // Use an irregular lake shape (multiple overlapping ellipses)
-  const lobes = [
-    { cx: 0, cy: 0, rx: 1.0, ry: 0.7, maxDepth: 60 },
-    { cx: -0.4, cy: 0.3, rx: 0.5, ry: 0.8, maxDepth: 45 },
-    { cx: 0.3, cy: -0.4, rx: 0.6, ry: 0.5, maxDepth: 50 },
-    { cx: 0.5, cy: 0.2, rx: 0.4, ry: 0.6, maxDepth: 35 },
-    { cx: -0.3, cy: -0.5, rx: 0.5, ry: 0.4, maxDepth: 40 },
-  ];
+  // Grid-based clustering
+  const clusters = new Map<string, MatchResult[]>();
 
-  // Channel running through the lake (old river bed)
-  const channelCenterX = 0.05;
-
-  for (let lng = centerLng - radiusDeg; lng <= centerLng + radiusDeg; lng += spacing) {
-    for (let lat = centerLat - radiusDeg; lat <= centerLat + radiusDeg; lat += spacing) {
-      const nx = (lng - centerLng) / radiusDeg;
-      const ny = (lat - centerLat) / radiusDeg;
-
-      // Check if point is inside any lobe
-      let bestDepthFactor = 0;
-      let maxDepthHere = 0;
-      let isInLake = false;
-
-      for (const lobe of lobes) {
-        const dx = (nx - lobe.cx) / lobe.rx;
-        const dy = (ny - lobe.cy) / lobe.ry;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < 1) {
-          isInLake = true;
-          const factor = 1 - dist;
-          if (factor > bestDepthFactor) {
-            bestDepthFactor = factor;
-            maxDepthHere = lobe.maxDepth;
-          }
-        }
-      }
-
-      if (!isInLake) continue;
-
-      // Channel bonus: deeper near the old river channel
-      const channelDist = Math.abs(nx - channelCenterX);
-      const channelBonus = channelDist < 0.15 ? (1 - channelDist / 0.15) * 15 : 0;
-
-      // Terrain noise for humps, ridges, flats
-      const noise1 = seededRandom(lng * 500, lat * 500) * 8 - 4;
-      const noise2 = Math.sin(lng * 800) * Math.cos(lat * 600) * 6;
-
-      const depth_ft = Math.max(1,
-        bestDepthFactor * maxDepthHere + channelBonus + noise1 + noise2,
-      );
-
-      // Compute slope from depth gradient (approximate)
-      const slope_deg = channelDist < 0.2
-        ? 8 + seededRandom(lng * 100, lat * 100) * 12
-        : bestDepthFactor < 0.3
-          ? 10 + seededRandom(lng * 200, lat * 200) * 15
-          : seededRandom(lng * 300, lat * 300) * 5;
-
-      // Distances
-      const shorelineDist_ft = bestDepthFactor * 3000;
-      const dropoffDist_ft = Math.abs(bestDepthFactor - 0.3) * 2000 + seededRandom(lng * 50, lat * 50) * 200;
-      const channelDist_ft = channelDist * radiusDeg * 364000; // approx feet
-      const pointDist_ft = seededRandom(lng * 77, lat * 77) * 4000;
-
-      // Wind exposure: edges more exposed, coves sheltered
-      const exposure = bestDepthFactor < 0.5 ? 0.3 + seededRandom(lng * 33, lat * 33) * 0.3 : 0.5 + seededRandom(lng * 44, lat * 44) * 0.5;
-
-      grid.push({
-        id: id++,
-        lng,
-        lat,
-        depth_ft,
-        slope_deg,
-        dropoffDist_ft,
-        channelDist_ft,
-        pointDist_ft,
-        shorelineDist_ft,
-        windExposure8: {
-          N: exposure * (0.8 + seededRandom(lng, lat + 1) * 0.4),
-          NE: exposure * (0.8 + seededRandom(lng + 1, lat + 1) * 0.4),
-          E: exposure * (0.8 + seededRandom(lng + 2, lat) * 0.4),
-          SE: exposure * (0.8 + seededRandom(lng + 1, lat - 1) * 0.4),
-          S: exposure * (0.8 + seededRandom(lng, lat - 1) * 0.4),
-          SW: exposure * (0.8 + seededRandom(lng - 1, lat - 1) * 0.4),
-          W: exposure * (0.8 + seededRandom(lng - 2, lat) * 0.4),
-          NW: exposure * (0.8 + seededRandom(lng - 1, lat + 1) * 0.4),
-        },
-      });
-    }
+  for (const r of results) {
+    const key = `${Math.round(r.lat / clusterRadius)}_${Math.round(r.lng / clusterRadius)}`;
+    if (!clusters.has(key)) clusters.set(key, []);
+    clusters.get(key)!.push(r);
   }
 
-  return grid;
+  const zones: HotspotZone[] = [];
+  let id = 0;
+
+  for (const members of clusters.values()) {
+    if (members.length === 0) continue;
+
+    const avgLat = members.reduce((s, m) => s + m.lat, 0) / members.length;
+    const avgLng = members.reduce((s, m) => s + m.lng, 0) / members.length;
+    const avgScore = members.reduce((s, m) => s + m.score, 0) / members.length;
+    const topResult = members.reduce((best, m) => m.score > best.score ? m : best, members[0]);
+
+    // Compute radius from spread of points
+    let maxDist = 0;
+    for (const m of members) {
+      const dist = Math.sqrt((m.lat - avgLat) ** 2 + (m.lng - avgLng) ** 2);
+      if (dist > maxDist) maxDist = dist;
+    }
+
+    zones.push({
+      id: id++,
+      centerLng: avgLng,
+      centerLat: avgLat,
+      avgScore,
+      topScore: topResult.score,
+      count: members.length,
+      radius_deg: Math.max(clusterRadius * 0.4, maxDist),
+      topResult,
+    });
+  }
+
+  // Sort by top score
+  zones.sort((a, b) => b.topScore - a.topScore);
+  return zones;
+}
+
+// Keep generateDemoGrid for backwards compatibility (unused but harmless)
+export function generateDemoGrid(): GridCell[] {
+  return [];
 }

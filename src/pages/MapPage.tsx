@@ -10,14 +10,16 @@ import { useGeolocation } from '../hooks/useGeolocation';
 import { fetchWeatherForCatch } from '../services/weather';
 import { getMoonPhase } from '../services/moonPhase';
 import { getSolunarWindows, isInFeedingWindow } from '../services/solunar';
-import { generateDemoGrid, type GridCell, type MatchResult } from '../services/patternEngine';
+import { type GridCell, type MatchResult } from '../services/patternEngine';
+import { fetchLakeGrid } from '../services/lakeGrid';
+import { fetchSpotCharacteristics } from '../services/spotCharacteristics';
 import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import type { Catch, CatchFormData, GeoPoint, CatchWeather } from '../types';
 
 export function MapPage() {
   const { selectedLake, setPendingPin, activeCatch, setActiveCatch } = useAppStore();
-  const { catches, addCatch } = useCatches(selectedLake?.id || null);
+  const { catches, addCatch, removeCatch } = useCatches(selectedLake?.id || null);
   const { getCurrentPosition, position, loading: geoLoading } = useGeolocation();
   const [showForm, setShowForm] = useState(false);
   const [formLocation, setFormLocation] = useState<GeoPoint | null>(null);
@@ -27,16 +29,28 @@ export function MapPage() {
   const [patternCatch, setPatternCatch] = useState<Catch | null>(null);
   const [patternResults, setPatternResults] = useState<MatchResult[]>([]);
   const [showTripPlan, setShowTripPlan] = useState(false);
+  const [editingCatchId, setEditingCatchId] = useState<string | null>(null);
 
-  // Generate demo grid for the selected lake
-  const demoGrid: GridCell[] = useMemo(() => {
-    if (!selectedLake) return [];
-    return generateDemoGrid(
-      selectedLake.center.longitude,
-      selectedLake.center.latitude,
-      0.05,
-      0.001,
-    );
+  // Fetch real depth grid for the selected lake
+  const [lakeGrid, setLakeGrid] = useState<GridCell[]>([]);
+  const [gridLoading, setGridLoading] = useState(false);
+
+  useEffect(() => {
+    if (!selectedLake) {
+      setLakeGrid([]);
+      return;
+    }
+    setGridLoading(true);
+    fetchLakeGrid(selectedLake.id)
+      .then(grid => {
+        setLakeGrid(grid);
+        console.log(`[MapPage] Loaded ${grid.length} grid cells for ${selectedLake.id}`);
+      })
+      .catch(err => {
+        console.error('[MapPage] Failed to load lake grid:', err);
+        setLakeGrid([]);
+      })
+      .finally(() => setGridLoading(false));
   }, [selectedLake?.id]);
 
   // Fetch current weather for the selected lake
@@ -78,14 +92,27 @@ export function MapPage() {
   }, [position, geoLoading]);
 
   const handleSubmit = async (data: CatchFormData) => {
-    await addCatch(data);
+    if (editingCatchId && selectedLake) {
+      // Update existing catch
+      const catchRef = doc(db, 'lakes', selectedLake.id, 'catches', editingCatchId);
+      await updateDoc(catchRef, {
+        species: data.species || null,
+        weight_lbs: data.weight_lbs ? parseFloat(data.weight_lbs) : null,
+        length_in: data.length_in ? parseFloat(data.length_in) : null,
+        lure: data.lure || null,
+        notes: data.notes || null,
+      });
+    } else {
+      await addCatch(data);
+      if (selectedLake) {
+        enrichCatch(selectedLake.id, data.location, data.timestamp);
+      }
+    }
     setPendingPin(null);
     setShowForm(false);
     setFormLocation(null);
     setFormTimestamp(null);
-    if (selectedLake) {
-      enrichCatchWithWeather(selectedLake.id, data.location, data.timestamp);
-    }
+    setEditingCatchId(null);
   };
 
   const handleCancel = () => {
@@ -93,10 +120,25 @@ export function MapPage() {
     setShowForm(false);
     setFormLocation(null);
     setFormTimestamp(null);
+    setEditingCatchId(null);
   };
 
   const handleCatchClick = (c: Catch) => {
     if (!showPattern) setActiveCatch(c);
+  };
+
+  const handleEditCatch = (c: Catch) => {
+    // Open the form pre-filled with this catch's data for editing
+    setActiveCatch(null);
+    setFormLocation(c.location);
+    setFormTimestamp(c.timestamp?.toDate?.() || new Date());
+    setEditingCatchId(c.id);
+    setShowForm(true);
+  };
+
+  const handleDeleteCatch = async (c: Catch) => {
+    await removeCatch(c.id);
+    setActiveCatch(null);
   };
 
   const handleFindSimilar = (c: Catch) => {
@@ -121,18 +163,20 @@ export function MapPage() {
     <>
       <MapContainer
         catches={catches}
+        lakeId={selectedLake?.id}
         onMapClick={handleMapClick}
         onCaughtNow={handleCaughtNow}
         onCatchClick={handleCatchClick}
         caughtNowLoading={geoLoading}
         currentWeather={currentWeather}
-        patternResults={showPattern ? patternResults : []}
+        patternResults={showPattern ? patternResults.slice(0, 200) : []}
       />
 
       {showForm && (
         <LogCatchForm
           initialLocation={formLocation}
           initialTimestamp={formTimestamp}
+          editCatch={editingCatchId ? catches.find(c => c.id === editingCatchId) : null}
           onSubmit={handleSubmit}
           onCancel={handleCancel}
         />
@@ -143,13 +187,15 @@ export function MapPage() {
           catchData={activeCatch}
           onClose={() => setActiveCatch(null)}
           onFindSimilar={handleFindSimilar}
+          onEdit={handleEditCatch}
+          onDelete={handleDeleteCatch}
         />
       )}
 
       {showPattern && patternCatch && (
         <PatternPanel
           catchData={patternCatch}
-          grid={demoGrid}
+          grid={lakeGrid}
           currentWeather={currentWeather}
           onResultsChange={setPatternResults}
           onSpotClick={handleSpotClick}
@@ -161,7 +207,7 @@ export function MapPage() {
         <TripPlanPanel
           lakeCenter={selectedLake.center}
           catches={catches}
-          grid={demoGrid}
+          grid={lakeGrid}
           onResultsChange={setPatternResults}
           onSpotClick={handleSpotClick}
           onClose={() => { setShowTripPlan(false); setPatternResults([]); }}
@@ -203,7 +249,7 @@ export function MapPage() {
   );
 }
 
-async function enrichCatchWithWeather(
+async function enrichCatch(
   lakeId: string,
   location: GeoPoint,
   timestamp: Date,
@@ -214,18 +260,32 @@ async function enrichCatchWithWeather(
     const snap = await getDocs(q(catchesRef, orderBy('loggedAt', 'desc'), limit(1)));
     if (snap.empty) return;
     const catchId = snap.docs[0].id;
+    const catchRef = doc(db, 'lakes', lakeId, 'catches', catchId);
 
-    const weather = await fetchWeatherForCatch(location.latitude, location.longitude, timestamp);
+    // Fetch weather and spot characteristics in parallel
+    const [weather, characteristics] = await Promise.all([
+      fetchWeatherForCatch(location.latitude, location.longitude, timestamp).catch(() => null),
+      fetchSpotCharacteristics(lakeId, location).catch(() => null),
+    ]);
+
     const moon = getMoonPhase(timestamp);
     const solunar = getSolunarWindows(timestamp, location.latitude);
     const feedingStatus = isInFeedingWindow(timestamp, solunar.windows);
 
-    const catchRef = doc(db, 'lakes', lakeId, 'catches', catchId);
-    await updateDoc(catchRef, {
-      weather: { ...weather, moon_phase: moon.phase, water_temp_f: null },
+    const updates: Record<string, unknown> = {
       solunar: { period: feedingStatus.period, minutesToWindow: feedingStatus.minutesToWindow },
-    });
+    };
+
+    if (weather) {
+      updates.weather = { ...weather, moon_phase: moon.phase, water_temp_f: null };
+    }
+    if (characteristics) {
+      updates.characteristics = characteristics;
+      console.log(`[enrichCatch] Depth: ${characteristics.depth_ft}ft, Slope: ${characteristics.slope_degrees}°, Structure: ${characteristics.nearestStructureType}`);
+    }
+
+    await updateDoc(catchRef, updates);
   } catch (err) {
-    console.error('Weather enrichment failed:', err);
+    console.error('Catch enrichment failed:', err);
   }
 }

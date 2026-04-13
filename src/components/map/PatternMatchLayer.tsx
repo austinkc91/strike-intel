@@ -1,155 +1,124 @@
-import { useEffect } from 'react';
-import { useMap } from '@vis.gl/react-maplibre';
-import type { MatchResult } from '../../services/patternEngine';
+import { useMemo } from 'react';
+import { Source, Layer } from '@vis.gl/react-maplibre';
+import { clusterHotspots, type MatchResult } from '../../services/patternEngine';
 
 interface PatternMatchLayerProps {
   results: MatchResult[];
-  visible?: boolean;
 }
 
-export function PatternMatchLayer({ results, visible = true }: PatternMatchLayerProps) {
-  const { current: map } = useMap();
+export function PatternMatchLayer({ results }: PatternMatchLayerProps) {
+  // Cluster results into zones
+  const zones = useMemo(() => clusterHotspots(results, 0.006), [results]);
 
-  useEffect(() => {
-    if (!map) return;
-    const m = map.getMap();
+  const zonesGeoJson = useMemo<GeoJSON.FeatureCollection>(() => ({
+    type: 'FeatureCollection',
+    features: zones.map((z) => ({
+      type: 'Feature' as const,
+      geometry: { type: 'Point' as const, coordinates: [z.centerLng, z.centerLat] },
+      properties: {
+        id: z.id,
+        avgScore: z.avgScore,
+        topScore: z.topScore,
+        count: z.count,
+        radius: z.radius_deg,
+      },
+    })),
+  }), [zones]);
 
-    const setup = () => {
-      // Build GeoJSON from results
-      const geojson: GeoJSON.FeatureCollection = {
-        type: 'FeatureCollection',
-        features: results.map((r) => ({
-          type: 'Feature' as const,
-          geometry: {
-            type: 'Point' as const,
-            coordinates: [r.lng, r.lat],
-          },
-          properties: {
-            score: r.score,
-            cellId: r.cellId,
-          },
-        })),
-      };
+  const top10 = useMemo<GeoJSON.FeatureCollection>(() => ({
+    type: 'FeatureCollection',
+    features: zones.slice(0, 10).map((z, i) => ({
+      type: 'Feature' as const,
+      geometry: { type: 'Point' as const, coordinates: [z.centerLng, z.centerLat] },
+      properties: {
+        rank: i + 1,
+        score: Math.round(z.topScore * 100),
+        count: z.count,
+      },
+    })),
+  }), [zones]);
 
-      // Add or update source
-      const source = m.getSource('pattern-match') as any;
-      if (source) {
-        source.setData(geojson);
-      } else {
-        m.addSource('pattern-match', {
-          type: 'geojson',
-          data: geojson,
-        });
-      }
+  if (results.length === 0) return null;
 
-      // Add heatmap layer
-      if (!m.getLayer('pattern-heatmap')) {
-        m.addLayer({
-          id: 'pattern-heatmap',
-          type: 'circle',
-          source: 'pattern-match',
-          paint: {
+  return (
+    <>
+      <Source id="pattern-zones" type="geojson" data={zonesGeoJson}>
+        {/* Large glow per zone — size based on cluster count */}
+        <Layer
+          id="pattern-zone-glow"
+          type="circle"
+          paint={{
             'circle-radius': [
               'interpolate', ['linear'], ['zoom'],
-              10, 8,
-              14, 20,
-              16, 35,
+              10, ['interpolate', ['linear'], ['get', 'count'], 1, 12, 5, 20, 15, 35],
+              13, ['interpolate', ['linear'], ['get', 'count'], 1, 20, 5, 40, 15, 65],
+              16, ['interpolate', ['linear'], ['get', 'count'], 1, 35, 5, 60, 15, 100],
             ],
             'circle-color': [
-              'interpolate', ['linear'], ['get', 'score'],
-              0.7, 'rgba(255, 167, 38, 0.3)',    // orange - somewhat similar
-              0.8, 'rgba(205, 220, 57, 0.4)',     // yellow-green - very similar
-              0.9, 'rgba(102, 187, 106, 0.5)',    // green - near identical
-              1.0, 'rgba(102, 187, 106, 0.7)',
+              'interpolate', ['linear'], ['get', 'topScore'],
+              0.7, 'rgba(255, 167, 38, 0.12)',
+              0.8, 'rgba(139, 195, 74, 0.18)',
+              0.85, 'rgba(76, 175, 80, 0.22)',
+              0.9, 'rgba(76, 175, 80, 0.3)',
+              0.95, 'rgba(46, 125, 50, 0.35)',
             ],
             'circle-blur': 0.6,
-            'circle-stroke-width': [
-              'case',
-              ['>=', ['get', 'score'], 0.9], 2,
-              0,
+          }}
+        />
+        {/* Solid center marker */}
+        <Layer
+          id="pattern-zone-dot"
+          type="circle"
+          paint={{
+            'circle-radius': [
+              'interpolate', ['linear'], ['zoom'],
+              10, ['interpolate', ['linear'], ['get', 'count'], 1, 4, 5, 7, 15, 10],
+              13, ['interpolate', ['linear'], ['get', 'count'], 1, 6, 5, 10, 15, 15],
+              16, ['interpolate', ['linear'], ['get', 'count'], 1, 10, 5, 16, 15, 22],
             ],
-            'circle-stroke-color': 'rgba(102, 187, 106, 0.8)',
-          },
-          layout: {
-            visibility: visible ? 'visible' : 'none',
-          },
-        });
-      }
+            'circle-color': [
+              'interpolate', ['linear'], ['get', 'topScore'],
+              0.7, '#ff9800',
+              0.8, '#8bc34a',
+              0.85, '#66bb6a',
+              0.9, '#4caf50',
+              0.95, '#2e7d32',
+            ],
+            'circle-opacity': 0.9,
+            'circle-stroke-width': 2,
+            'circle-stroke-color': '#ffffff',
+            'circle-stroke-opacity': 0.8,
+          }}
+        />
+      </Source>
 
-      // Add top-5 labels
-      if (!m.getLayer('pattern-top-labels')) {
-        // Create a source for just the top 5
-        const top5: GeoJSON.FeatureCollection = {
-          type: 'FeatureCollection',
-          features: results.slice(0, 5).map((r, i) => ({
-            type: 'Feature' as const,
-            geometry: {
-              type: 'Point' as const,
-              coordinates: [r.lng, r.lat],
-            },
-            properties: {
-              rank: i + 1,
-              score: Math.round(r.score * 100),
-            },
-          })),
-        };
-
-        const top5Source = m.getSource('pattern-top5') as any;
-        if (top5Source) {
-          top5Source.setData(top5);
-        } else {
-          m.addSource('pattern-top5', {
-            type: 'geojson',
-            data: top5,
-          });
-        }
-
-        m.addLayer({
-          id: 'pattern-top-labels',
-          type: 'symbol',
-          source: 'pattern-top5',
-          layout: {
-            'text-field': ['concat', '#', ['get', 'rank'], ' ', ['get', 'score'], '%'],
-            'text-font': ['Open Sans Bold'],
-            'text-size': 12,
-            'text-offset': [0, -1.5],
-            visibility: visible ? 'visible' : 'none',
-          },
-          paint: {
+      <Source id="pattern-top10" type="geojson" data={top10}>
+        {/* Rank labels */}
+        <Layer
+          id="pattern-top-labels"
+          type="symbol"
+          layout={{
+            'text-field': [
+              'concat',
+              '#', ['get', 'rank'],
+              ' ', ['get', 'score'], '%',
+            ],
+            'text-font': ['Open Sans Semibold'],
+            'text-size': [
+              'interpolate', ['linear'], ['zoom'],
+              10, 10,
+              14, 13,
+            ],
+            'text-offset': [0, -1.6],
+            'text-allow-overlap': true,
+          }}
+          paint={{
             'text-color': '#ffffff',
             'text-halo-color': 'rgba(10, 25, 41, 0.9)',
             'text-halo-width': 2,
-          },
-        });
-      } else {
-        // Update top 5 source
-        const top5: GeoJSON.FeatureCollection = {
-          type: 'FeatureCollection',
-          features: results.slice(0, 5).map((r, i) => ({
-            type: 'Feature' as const,
-            geometry: { type: 'Point' as const, coordinates: [r.lng, r.lat] },
-            properties: { rank: i + 1, score: Math.round(r.score * 100) },
-          })),
-        };
-        const top5Source = m.getSource('pattern-top5') as any;
-        if (top5Source) top5Source.setData(top5);
-      }
-    };
-
-    if (m.isStyleLoaded()) {
-      setup();
-    } else {
-      m.on('load', setup);
-    }
-
-    return () => {
-      const mp = map.getMap();
-      if (mp.getLayer('pattern-top-labels')) mp.removeLayer('pattern-top-labels');
-      if (mp.getLayer('pattern-heatmap')) mp.removeLayer('pattern-heatmap');
-      if (mp.getSource('pattern-top5')) mp.removeSource('pattern-top5');
-      if (mp.getSource('pattern-match')) mp.removeSource('pattern-match');
-    };
-  }, [map, results, visible]);
-
-  return null;
+          }}
+        />
+      </Source>
+    </>
+  );
 }
