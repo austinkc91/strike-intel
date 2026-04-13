@@ -6,6 +6,7 @@ import { CatchPinLayer } from './CatchPinLayer';
 import { CaughtNowButton } from '../catch/CaughtNowButton';
 import { WindRose } from './WindRose';
 import { PatternMatchLayer } from './PatternMatchLayer';
+import { DepthTileLayer } from './DepthTileLayer';
 import type { Catch, CatchWeather } from '../../types';
 import type { MatchResult } from '../../services/patternEngine';
 
@@ -63,6 +64,7 @@ interface MapContainerProps {
   caughtNowLoading: boolean;
   currentWeather?: CatchWeather | null;
   patternResults?: MatchResult[];
+  showDepthTiles?: boolean;
 }
 
 export function MapContainer({
@@ -73,9 +75,10 @@ export function MapContainer({
   caughtNowLoading,
   currentWeather,
   patternResults = [],
+  showDepthTiles = true,
 }: MapContainerProps) {
   const mapRef = useRef<MapRef>(null);
-  const { mapCenter, mapZoom } = useAppStore();
+  const { mapCenter, mapZoom, selectedLake } = useAppStore();
   const [showSatellite, setShowSatellite] = useState(false);
 
   const handleClick = useCallback(
@@ -121,6 +124,14 @@ export function MapContainer({
               paint={{ 'raster-opacity': 0.6 }}
             />
           </Source>
+        )}
+
+        {/* GLOBathy depth contour vector tiles */}
+        {selectedLake && (
+          <DepthTileLayer
+            lakeId={selectedLake.id}
+            visible={showDepthTiles}
+          />
         )}
 
         <CatchPinLayer catches={catches} onCatchClick={onCatchClick} />

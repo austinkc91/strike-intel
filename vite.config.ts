@@ -52,6 +52,15 @@ export default defineConfig({
               cacheableResponse: { statuses: [0, 200] },
             },
           },
+          {
+            urlPattern: /\/tiles\/\d+\/\d+\/\d+\.pbf$/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'depth-vector-tiles',
+              expiration: { maxEntries: 1000, maxAgeSeconds: 60 * 60 * 24 * 7 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
         ],
       },
     }),

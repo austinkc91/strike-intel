@@ -1,0 +1,65 @@
+version: "3.8"
+
+services:
+  # --- Data processing pipeline (run once) ---
+  pipeline:
+    build:
+      context: ./pipeline
+      dockerfile: Dockerfile
+    volumes:
+      - ./data:/data
+      - ./pipeline:/pipeline:ro
+    profiles:
+      - pipeline
+    command: /pipeline/process.sh /pipeline/config.yaml
+
+  # --- Vector tile server (tileserver-gl) ---
+  tileserver:
+    image: maptiler/tileserver-gl:v4.14.0
+    volumes:
+      - ./data/output:/data/output:ro
+    ports:
+      - "8080:8080"
+    command: >
+      --config /data/output/tileserver-config.json
+      --port 8080
+      --verbose
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # --- Depth API server ---
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    volumes:
+      - ./data/output:/data/output:ro
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - TILESERVER_URL=http://tileserver:8080
+      - DATA_DIR=/data/output
+    depends_on:
+      tileserver:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # --- Frontend dev (optional, for local dev) ---
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - .:/app
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_DEPTH_API_URL=http://localhost:3001
+    profiles:
+      - dev

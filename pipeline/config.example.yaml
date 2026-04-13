@@ -1,0 +1,31 @@
+# Lake depth tile pipeline configuration
+# Copy to config.yaml and adjust for your lakes
+
+# Path to GLOBathy raster dataset (GeoTIFF)
+# Download from: https://www.hydrosheds.org/products/globathy
+globathy_raster: /data/GLOBathy_bathymetry.tif
+
+# Output directory for processed tiles
+output_dir: /data/output
+
+# Contour interval in feet
+contour_interval_ft: 1
+
+# Major contour interval (labeled/thicker)
+major_contour_interval_ft: 5
+
+# Tippecanoe settings
+min_zoom: 8
+max_zoom: 16
+
+# Lakes to process - each needs a boundary GeoJSON
+lakes:
+  - id: lake-travis
+    name: Lake Travis
+    boundary_geojson: /data/boundaries/lake-travis.geojson
+    # Override contour interval per-lake if desired
+    # contour_interval_ft: 2
+
+  # - id: table-rock-lake
+  #   name: Table Rock Lake
+  #   boundary_geojson: /data/boundaries/table-rock-lake.geojson
