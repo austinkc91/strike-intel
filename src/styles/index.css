@@ -15,11 +15,21 @@
   --color-text-muted: #8a9ba8;
   --color-text-subtle: #58697a;
 
-  /* Single accent (teal) — used sparingly for emphasis */
+  /* Primary accent (teal) — water, cool, navigation */
   --color-accent: #5eb8e6;
   --color-accent-strong: #3ea6d9;
   --color-accent-dim: rgba(94, 184, 230, 0.14);
   --color-accent-glow: rgba(94, 184, 230, 0.35);
+
+  /* Action accent (orange) — brand color, CTAs, "do this" actions */
+  --color-action: #ff8a3d;
+  --color-action-strong: #f97316;
+  --color-action-dim: rgba(255, 138, 61, 0.14);
+  --color-action-glow: rgba(255, 138, 61, 0.40);
+
+  /* Brand text gradient (matches logo wordmark) */
+  --brand-gradient: linear-gradient(180deg, #f5f9ff 0%, #94c8ee 100%);
+  --brand-tagline: #ff8a3d;
 
   /* Status colors — only when meaningful */
   --color-good: #4ade80;
@@ -178,6 +188,14 @@ a { color: inherit; text-decoration: none; }
 }
 
 .btn-primary:hover { background: var(--color-accent-strong); }
+
+.btn-action {
+  background: var(--color-action);
+  color: #1a0a00;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.18) inset, 0 4px 14px var(--color-action-glow);
+}
+
+.btn-action:hover { background: var(--color-action-strong); }
 
 .btn-secondary {
   background: var(--color-surface);
@@ -489,15 +507,15 @@ a { color: inherit; text-decoration: none; }
   position: absolute;
   bottom: 20px;
   right: 20px;
-  width: 56px;
-  height: 56px;
+  width: 60px;
+  height: 60px;
   border-radius: 50%;
-  background: var(--color-accent);
-  color: #041322;
+  background: var(--color-action);
+  color: #1a0a00;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 6px 16px var(--color-accent-glow), 0 2px 4px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 8px 24px var(--color-action-glow), 0 2px 4px rgba(0, 0, 0, 0.5), 0 1px 0 rgba(255,255,255,0.18) inset;
   z-index: 50;
   font-size: 22px;
   transition: transform 0.15s, box-shadow 0.15s;
@@ -531,6 +549,11 @@ a { color: inherit; text-decoration: none; }
   to { transform: translateY(0); }
 }
 
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 .bottom-sheet-handle {
   width: 36px;
   height: 4px;
@@ -553,10 +576,10 @@ a { color: inherit; text-decoration: none; }
 .pending-marker {
   width: 28px;
   height: 28px;
-  background: var(--color-accent);
+  background: var(--color-action);
   border: 3px solid #fff;
   border-radius: 50%;
-  box-shadow: 0 0 0 6px var(--color-accent-glow), 0 4px 10px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 0 0 6px var(--color-action-glow), 0 4px 10px rgba(0, 0, 0, 0.4);
   animation: pulse 1.8s ease-in-out infinite;
 }
 

@@ -11,6 +11,11 @@ interface AppState {
   pendingPin: GeoPoint | null;
   setPendingPin: (pin: GeoPoint | null) => void;
 
+  // Catch ID to auto-open in pattern mode when MapPage mounts. Used by
+  // navigation from the Catches list ("Find Similar" on a tile).
+  pendingPatternCatchId: string | null;
+  setPendingPatternCatchId: (id: string | null) => void;
+
   isLogging: boolean;
   setIsLogging: (v: boolean) => void;
 
@@ -30,6 +35,9 @@ export const useAppStore = create<AppState>((set) => ({
 
   pendingPin: null,
   setPendingPin: (pin) => set({ pendingPin: pin }),
+
+  pendingPatternCatchId: null,
+  setPendingPatternCatchId: (id) => set({ pendingPatternCatchId: id }),
 
   isLogging: false,
   setIsLogging: (v) => set({ isLogging: v }),

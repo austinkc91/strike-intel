@@ -18,7 +18,7 @@ import { db } from '../services/firebase';
 import type { Catch, CatchFormData, GeoPoint, CatchWeather } from '../types';
 
 export function MapPage() {
-  const { selectedLake, setPendingPin, activeCatch, setActiveCatch } = useAppStore();
+  const { selectedLake, setPendingPin, activeCatch, setActiveCatch, pendingPatternCatchId, setPendingPatternCatchId } = useAppStore();
   const { catches, addCatch, removeCatch } = useCatches(selectedLake?.id || null);
   const { getCurrentPosition, position, loading: geoLoading } = useGeolocation();
   const [showForm, setShowForm] = useState(false);
@@ -90,6 +90,18 @@ export function MapPage() {
       setShowForm(true);
     }
   }, [position, geoLoading]);
+
+  // Auto-open the pattern panel when navigated here with a pending catch
+  // (set by "Find Similar" on the Catches page).
+  useEffect(() => {
+    if (!pendingPatternCatchId) return;
+    const target = catches.find(c => c.id === pendingPatternCatchId);
+    if (target) {
+      setPatternCatch(target);
+      setShowPattern(true);
+      setPendingPatternCatchId(null);
+    }
+  }, [pendingPatternCatchId, catches]);
 
   const handleSubmit = async (data: CatchFormData) => {
     if (editingCatchId && selectedLake) {

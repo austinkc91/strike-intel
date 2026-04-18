@@ -7,28 +7,20 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png'],
+      includeAssets: ['StrikeIntelLogo.png'],
       manifest: {
         name: 'Strike Intel',
         short_name: 'Strike Intel',
-        description: 'Pattern-based freshwater fishing intelligence',
+        description: 'Pattern-based freshwater fishing intelligence for Lake Texoma',
         start_url: '/',
         display: 'standalone',
         orientation: 'portrait',
-        theme_color: '#0f2942',
-        background_color: '#0a1929',
+        theme_color: '#060d17',
+        background_color: '#060d17',
         icons: [
-          {
-            src: '/icons/icon-192.png',
-            sizes: '192x192',
-            type: 'image/png',
-          },
-          {
-            src: '/icons/icon-512.png',
-            sizes: '512x512',
-            type: 'image/png',
-            purpose: 'any maskable',
-          },
+          { src: '/StrikeIntelLogo.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: '/StrikeIntelLogo.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          { src: '/StrikeIntelLogo.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
       },
       workbox: {

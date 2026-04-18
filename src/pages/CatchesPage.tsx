@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../store';
 import { useCatches } from '../hooks/useCatches';
 import { moonPhaseEmoji, getMoonPhase } from '../services/moonPhase';
@@ -9,11 +10,33 @@ import type { Catch, CatchWeather } from '../types';
 type SortMode = 'recent' | 'best-today';
 
 export function CatchesPage() {
-  const { selectedLake } = useAppStore();
-  const { catches, loading } = useCatches(selectedLake?.id || null);
+  const navigate = useNavigate();
+  const { selectedLake, setPendingPatternCatchId } = useAppStore();
+  const { catches, loading, removeCatch } = useCatches(selectedLake?.id || null);
   const [sortMode, setSortMode] = useState<SortMode>('recent');
   const [currentWeather, setCurrentWeather] = useState<CatchWeather | null>(null);
   const [weatherLoading, setWeatherLoading] = useState(false);
+  const [actionSheetCatch, setActionSheetCatch] = useState<Catch | null>(null);
+
+  const handleFindSimilar = (c: Catch) => {
+    setPendingPatternCatchId(c.id);
+    setActionSheetCatch(null);
+    navigate('/map');
+  };
+
+  const handleViewOnMap = (c: Catch) => {
+    const { setMapCenter, setMapZoom, setActiveCatch } = useAppStore.getState();
+    setMapCenter([c.location.longitude, c.location.latitude]);
+    setMapZoom(15);
+    setActiveCatch(c);
+    setActionSheetCatch(null);
+    navigate('/map');
+  };
+
+  const handleDelete = async (c: Catch) => {
+    await removeCatch(c.id);
+    setActionSheetCatch(null);
+  };
 
   useEffect(() => {
     if (sortMode !== 'best-today' || !selectedLake || currentWeather) return;
@@ -141,10 +164,148 @@ export function CatchesPage() {
             catch_={c}
             match={match}
             sortMode={sortMode}
+            onTap={() => setActionSheetCatch(c)}
           />
         ))}
       </div>
+
+      {actionSheetCatch && (
+        <CatchActionSheet
+          catch_={actionSheetCatch}
+          onClose={() => setActionSheetCatch(null)}
+          onFindSimilar={handleFindSimilar}
+          onViewOnMap={handleViewOnMap}
+          onDelete={handleDelete}
+        />
+      )}
     </div>
+  );
+}
+
+// ============================================================
+// Action sheet — opens when a tile is tapped
+// ============================================================
+
+function CatchActionSheet({
+  catch_: c,
+  onClose,
+  onFindSimilar,
+  onViewOnMap,
+  onDelete,
+}: {
+  catch_: Catch;
+  onClose: () => void;
+  onFindSimilar: (c: Catch) => void;
+  onViewOnMap: (c: Catch) => void;
+  onDelete: (c: Catch) => void;
+}) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const ts = c.timestamp?.toDate?.();
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div
+        onClick={onClose}
+        style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.55)',
+          zIndex: 199,
+          animation: 'fadeIn 0.2s',
+        }}
+      />
+      <div className="bottom-sheet" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)' }}>
+        <div className="bottom-sheet-handle" />
+
+        <div style={{ marginBottom: 16 }}>
+          <div className="eyebrow">{ts?.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</div>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 700, marginTop: 4, letterSpacing: '-0.02em' }}>
+            {c.species || 'Catch'}
+          </div>
+          {(c.weight_lbs || c.length_in) && (
+            <div className="meta" style={{ marginTop: 4 }}>
+              {c.weight_lbs && <span style={{ color: 'var(--color-text)', fontWeight: 600 }}>{c.weight_lbs} lbs</span>}
+              {c.weight_lbs && c.length_in && <span> · </span>}
+              {c.length_in && <span style={{ color: 'var(--color-text)', fontWeight: 600 }}>{c.length_in}"</span>}
+              {c.lure && <span> · {c.lure}</span>}
+            </div>
+          )}
+        </div>
+
+        {/* Spot data preview */}
+        {c.characteristics && (
+          <div className="card" style={{ marginBottom: 16, background: 'var(--color-bg-raised)' }}>
+            <div className="eyebrow" style={{ marginBottom: 8 }}>Spot</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 16px', fontSize: 13 }}>
+              {c.characteristics.depth_ft != null && (
+                <div><span className="meta">Depth</span> <span style={{ color: 'var(--color-text)', fontWeight: 600 }}>{c.characteristics.depth_ft}ft</span></div>
+              )}
+              {c.characteristics.slope_degrees != null && (
+                <div><span className="meta">Slope</span> <span style={{ color: 'var(--color-text)', fontWeight: 600 }}>{c.characteristics.slope_degrees}°</span></div>
+              )}
+              {c.characteristics.nearestStructureType && (
+                <div><span className="meta">Structure</span> <span style={{ color: 'var(--color-text)', fontWeight: 600 }}>{c.characteristics.nearestStructureType}</span></div>
+              )}
+              {c.characteristics.channelProximity != null && (
+                <div><span className="meta">Channel</span> <span style={{ color: 'var(--color-text)', fontWeight: 600 }}>{c.characteristics.channelProximity}ft</span></div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="stack stack-gap-2">
+          <button className="btn btn-action btn-block" onClick={() => onFindSimilar(c)}>
+            <Icon name="target" /> Find Similar Spots
+          </button>
+          <button className="btn btn-secondary btn-block" onClick={() => onViewOnMap(c)}>
+            <Icon name="map" /> View on Map
+          </button>
+          {!confirmDelete ? (
+            <button
+              className="btn btn-secondary btn-block"
+              onClick={() => setConfirmDelete(true)}
+              style={{ color: 'var(--color-danger)', borderColor: 'rgba(248,113,113,0.25)' }}
+            >
+              <Icon name="trash" /> Delete Catch
+            </button>
+          ) : (
+            <button
+              className="btn btn-danger btn-block"
+              onClick={() => onDelete(c)}
+            >
+              Tap to confirm delete
+            </button>
+          )}
+          <button className="btn btn-ghost btn-block" onClick={onClose} style={{ marginTop: 4 }}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function Icon({ name }: { name: 'target' | 'map' | 'trash' }) {
+  if (name === 'target') {
+    return (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="6" /><circle cx="12" cy="12" r="2" />
+      </svg>
+    );
+  }
+  if (name === 'map') {
+    return (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6" /><line x1="8" y1="2" x2="8" y2="18" /><line x1="16" y1="6" x2="16" y2="22" />
+      </svg>
+    );
+  }
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+    </svg>
   );
 }
 
@@ -156,10 +317,12 @@ function CatchCard({
   catch_: c,
   match,
   sortMode,
+  onTap,
 }: {
   catch_: Catch;
   match: ConditionsMatch | null;
   sortMode: SortMode;
+  onTap: () => void;
 }) {
   const ts = c.timestamp?.toDate?.();
   const matchPct = match ? Math.round(match.score * 100) : null;
@@ -171,7 +334,19 @@ function CatchCard({
         : 'muted';
 
   return (
-    <div className="catch-card">
+    <button
+      className="catch-card"
+      onClick={onTap}
+      style={{
+        width: '100%',
+        textAlign: 'left',
+        cursor: 'pointer',
+        transition: 'background 0.15s, transform 0.08s',
+      }}
+      onMouseDown={(e) => (e.currentTarget.style.transform = 'scale(0.997)')}
+      onMouseUp={(e) => (e.currentTarget.style.transform = '')}
+      onMouseLeave={(e) => (e.currentTarget.style.transform = '')}
+    >
       <div className="catch-card-header">
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="catch-card-species">{c.species || 'Unknown species'}</div>
@@ -266,7 +441,7 @@ function CatchCard({
           No weather data — cannot match conditions
         </div>
       )}
-    </div>
+    </button>
   );
 }
 
