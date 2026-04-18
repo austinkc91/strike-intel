@@ -4,7 +4,10 @@ import { SimilarSpotsList } from './SimilarSpotsList';
 import {
   findSimilarSpots,
   buildSignature,
+  buildCellSignature,
   computeNormRanges,
+  computeDepthChangeLookup,
+  findNearestCell,
   getSpeciesWeights,
   type PatternWeights,
   type GridCell,
@@ -43,7 +46,20 @@ export function PatternPanel({
   const moon = getMoonPhase(timestamp);
   const windDeg = currentWeather?.wind_direction_deg ?? catchData.weather?.wind_direction_deg ?? 0;
 
+  // Anchor the reference signature to the grid cell nearest the catch location.
+  // This guarantees the reference goes through the same transforms (time-of-day
+  // depth factor, computed wind advantage, depth-change from neighbors) as every
+  // candidate cell — without this, self-comparison scores < 1.0 and the 85%
+  // threshold throws out real matches. Falls back to characteristics-based
+  // signature only if no grid cell is available.
   const referenceSignature = useMemo(() => {
+    if (grid.length > 0 && catchData.location) {
+      const nearest = findNearestCell(grid, catchData.location.latitude, catchData.location.longitude);
+      if (nearest) {
+        const depthChangeLookup = computeDepthChangeLookup(grid);
+        return buildCellSignature(nearest, windDeg, timestamp, moon.illumination, ranges, depthChangeLookup);
+      }
+    }
     const chars = catchData.characteristics;
     return buildSignature(
       chars?.depth_ft ?? 10,
@@ -57,7 +73,7 @@ export function PatternPanel({
       moon.illumination,
       ranges,
     );
-  }, [catchData, ranges, timestamp, moon.illumination]);
+  }, [catchData, grid, windDeg, ranges, timestamp, moon.illumination]);
 
   const results = useMemo(() => {
     if (grid.length === 0) return [];

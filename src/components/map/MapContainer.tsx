@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Map, NavigationControl, GeolocateControl, Source, Layer } from '@vis.gl/react-maplibre';
 import type { MapRef, MapLayerMouseEvent } from '@vis.gl/react-maplibre';
 import { useAppStore } from '../../store';
@@ -8,36 +8,33 @@ import { WindRose } from './WindRose';
 import { PatternMatchLayer } from './PatternMatchLayer';
 import type { Catch, CatchWeather } from '../../types';
 import type { MatchResult } from '../../services/patternEngine';
+import { TILE_SERVER } from '../../services/tileServer';
 
 // USGS Topo for land base map
 const USGS_TOPO_TILES = 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}';
 const USGS_IMAGERY_TILES = 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}';
 
-const TILE_SERVER = import.meta.env.VITE_TILE_SERVER || 'http://localhost:3001';
-
-function buildMapStyle(): maplibregl.StyleSpecification {
-  return {
-    version: 8,
-    glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
-    sources: {
-      'usgs-topo': {
-        type: 'raster',
-        tiles: [USGS_TOPO_TILES],
-        tileSize: 256,
-        attribution: 'USGS',
-        maxzoom: 16,
-      },
+const MAP_STYLE: maplibregl.StyleSpecification = {
+  version: 8,
+  glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+  sources: {
+    'usgs-topo': {
+      type: 'raster',
+      tiles: [USGS_TOPO_TILES],
+      tileSize: 256,
+      attribution: 'USGS',
+      maxzoom: 16,
     },
-    layers: [
-      {
-        id: 'usgs-topo-layer',
-        type: 'raster',
-        source: 'usgs-topo',
-        paint: {},
-      },
-    ],
-  };
-}
+  },
+  layers: [
+    {
+      id: 'usgs-topo-layer',
+      type: 'raster',
+      source: 'usgs-topo',
+      paint: {},
+    },
+  ],
+};
 
 interface MapContainerProps {
   catches: Catch[];
@@ -61,40 +58,120 @@ export function MapContainer({
   patternResults = [],
 }: MapContainerProps) {
   const mapRef = useRef<MapRef>(null);
-  const { mapCenter, mapZoom } = useAppStore();
+  const { mapCenter, mapZoom, pendingPin } = useAppStore();
   const [showSatellite, setShowSatellite] = useState(false);
   const [boundary, setBoundary] = useState<GeoJSON.FeatureCollection | null>(null);
 
-  const mapStyle = useMemo(() => buildMapStyle(), []);
+  const [mapLoaded, setMapLoaded] = useState(false);
 
-  // Build an inverted mask: world polygon with lake boundary cut out.
-  // Placed above contour layers to clip any lines bleeding past the boundary.
-  const invertedMask = useMemo(() => {
-    if (!boundary?.features?.[0]) return null;
-    const feat = boundary.features[0];
-    const coords = feat.geometry.type === 'Polygon'
-      ? feat.geometry.coordinates
-      : feat.geometry.type === 'MultiPolygon'
-        ? feat.geometry.coordinates[0]
-        : null;
-    if (!coords) return null;
+  const handleMapLoad = useCallback(() => {
+    setMapLoaded(true);
+    const m = mapRef.current?.getMap();
+    if (m) {
+      m.on('error', (e: { error?: Error; sourceId?: string; tile?: { tileID?: { canonical?: { z: number; x: number; y: number } } } }) => {
+        const t = e.tile?.tileID?.canonical;
+        const tileStr = t ? `z${t.z}/${t.x}/${t.y}` : '';
+        console.warn('[maplibre]', e.sourceId || '', tileStr, e.error?.message || e.error || e);
+      });
+    }
+  }, []);
 
-    // World-extent outer ring, lake boundary as hole (wound opposite direction)
-    const worldRing: [number, number][] = [
-      [-180, -85], [180, -85], [180, 85], [-180, 85], [-180, -85],
-    ];
-    return {
-      type: 'FeatureCollection' as const,
-      features: [{
-        type: 'Feature' as const,
-        properties: {},
-        geometry: {
-          type: 'Polygon' as const,
-          coordinates: [worldRing, ...coords],
-        },
-      }],
+  // Fly to pendingPin when it changes (covers map-click + EXIF-extracted location)
+  useEffect(() => {
+    if (!mapLoaded || !pendingPin) return;
+    const m = mapRef.current?.getMap();
+    if (!m) return;
+    const center = m.getCenter();
+    const dx = Math.abs(center.lng - pendingPin.longitude);
+    const dy = Math.abs(center.lat - pendingPin.latitude);
+    // Only pan if the pin is appreciably away from current center (avoid jitter on click-placed pins)
+    if (dx < 0.001 && dy < 0.001) return;
+    m.flyTo({
+      center: [pendingPin.longitude, pendingPin.latitude],
+      zoom: Math.max(m.getZoom(), 15),
+      duration: 800,
+      essential: true,
+    });
+  }, [pendingPin?.latitude, pendingPin?.longitude, mapLoaded]);
+
+  // Add/update contour tile source imperatively when lakeId changes and map is loaded
+  useEffect(() => {
+    if (!mapLoaded || !lakeId) return;
+    const m = mapRef.current?.getMap();
+    if (!m) return;
+
+    // Remove old source/layers if they exist
+    for (const layerId of ['twdb-contour-labels', 'twdb-contour-lines-bold', 'twdb-contour-lines']) {
+      if (m.getLayer(layerId)) m.removeLayer(layerId);
+    }
+    if (m.getSource('twdb-contours')) m.removeSource('twdb-contours');
+
+    // Add vector tile source
+    m.addSource('twdb-contours', {
+      type: 'vector',
+      tiles: [`${TILE_SERVER}/tiles/${lakeId}/{z}/{x}/{y}.pbf`],
+      minzoom: 8,
+      maxzoom: 16,
+    });
+
+    // Insert contours above the water fill but below the boundary outline
+    const beforeLayer = m.getLayer('lake-boundary-line') ? 'lake-boundary-line' : undefined;
+
+    m.addLayer({
+      id: 'twdb-contour-lines',
+      type: 'line',
+      source: 'twdb-contours',
+      'source-layer': 'contours',
+      filter: ['==', ['get', 'level'], 0],
+      minzoom: 13,
+      paint: {
+        'line-color': '#0288d1',
+        'line-opacity': ['interpolate', ['linear'], ['zoom'], 13, 0.25, 15, 0.45],
+        'line-width': ['interpolate', ['linear'], ['zoom'], 13, 0.4, 15, 0.8, 16, 1],
+      },
+    }, beforeLayer);
+
+    m.addLayer({
+      id: 'twdb-contour-lines-bold',
+      type: 'line',
+      source: 'twdb-contours',
+      'source-layer': 'contours',
+      filter: ['==', ['get', 'level'], 1],
+      paint: {
+        'line-color': '#01579b',
+        'line-opacity': ['interpolate', ['linear'], ['zoom'], 10, 0.6, 13, 0.85],
+        'line-width': ['interpolate', ['linear'], ['zoom'], 10, 1, 13, 1.8, 16, 2.5],
+      },
+    }, beforeLayer);
+
+    m.addLayer({
+      id: 'twdb-contour-labels',
+      type: 'symbol',
+      source: 'twdb-contours',
+      'source-layer': 'contours',
+      filter: ['==', ['get', 'level'], 1],
+      paint: { 'text-color': '#ffffff', 'text-halo-color': '#01579b', 'text-halo-width': 2 },
+      layout: {
+        'symbol-placement': 'line',
+        'text-field': ['concat', ['to-string', ['get', 'depth_ft']], ' ft'],
+        'text-size': ['interpolate', ['linear'], ['zoom'], 10, 10, 13, 13, 16, 15],
+        'text-max-angle': 30,
+        'symbol-spacing': 200,
+      },
+    }, beforeLayer);
+
+    console.log(`[MapContainer] Added contour layers for ${lakeId}`);
+
+    return () => {
+      const mp = mapRef.current?.getMap();
+      if (!mp) return;
+      for (const layerId of ['twdb-contour-labels', 'twdb-contour-lines-bold', 'twdb-contour-lines']) {
+        if (mp.getLayer(layerId)) mp.removeLayer(layerId);
+      }
+      if (mp.getSource('twdb-contours')) mp.removeSource('twdb-contours');
     };
-  }, [boundary]);
+  }, [lakeId, mapLoaded]);
+
 
   // Fetch lake boundary when lakeId changes
   useEffect(() => {
@@ -102,12 +179,22 @@ export function MapContainer({
       setBoundary(null);
       return;
     }
+    console.log(`[MapContainer] Fetching boundary from: ${TILE_SERVER}/boundary?lake=${lakeId}`);
     fetch(`${TILE_SERVER}/boundary?lake=${lakeId}`)
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        if (data) setBoundary(data);
+      .then(r => {
+        console.log(`[MapContainer] Boundary response: ${r.status}`);
+        return r.ok ? r.json() : null;
       })
-      .catch(() => setBoundary(null));
+      .then(data => {
+        if (data) {
+          console.log(`[MapContainer] Boundary loaded: ${data.features?.length} features`);
+          setBoundary(data);
+        }
+      })
+      .catch((err) => {
+        console.error(`[MapContainer] Boundary fetch failed:`, err);
+        setBoundary(null);
+      });
   }, [lakeId]);
 
   const handleClick = useCallback(
@@ -117,11 +204,6 @@ export function MapContainer({
     [onMapClick],
   );
 
-  // Contour tile URL
-  const contourTiles = useMemo(
-    () => lakeId ? [`${TILE_SERVER}/tiles/${lakeId}/{z}/{x}/{y}.pbf`] : [],
-    [lakeId],
-  );
 
   return (
     <div className="map-container">
@@ -132,8 +214,9 @@ export function MapContainer({
           latitude: mapCenter[1],
           zoom: mapZoom,
         }}
-        mapStyle={mapStyle}
+        mapStyle={MAP_STYLE}
         onClick={handleClick}
+        onLoad={handleMapLoad}
         attributionControl={false}
       >
         <NavigationControl position="top-right" />
@@ -174,84 +257,7 @@ export function MapContainer({
           </Source>
         )}
 
-        {/* TWDB contour tiles — only render when we have a boundary to clip to */}
-        {lakeId && boundary && (
-          <Source
-            id="twdb-contours"
-            type="vector"
-            tiles={contourTiles}
-            minzoom={8}
-            maxzoom={16}
-          >
-            {/* Minor contours (every 2ft) — only show when zoomed in */}
-            <Layer
-              id="twdb-contour-lines"
-              type="line"
-              source-layer="contours"
-              filter={['==', ['get', 'level'], 0]}
-              minzoom={13}
-              paint={{
-                'line-color': '#0288d1',
-                'line-opacity': [
-                  'interpolate', ['linear'], ['zoom'],
-                  13, 0.25,
-                  15, 0.45,
-                ],
-                'line-width': [
-                  'interpolate', ['linear'], ['zoom'],
-                  13, 0.4,
-                  15, 0.8,
-                  16, 1,
-                ],
-              }}
-            />
-            {/* Major contours (every 10ft) — always visible */}
-            <Layer
-              id="twdb-contour-lines-bold"
-              type="line"
-              source-layer="contours"
-              filter={['==', ['get', 'level'], 1]}
-              paint={{
-                'line-color': '#01579b',
-                'line-opacity': [
-                  'interpolate', ['linear'], ['zoom'],
-                  10, 0.6,
-                  13, 0.85,
-                ],
-                'line-width': [
-                  'interpolate', ['linear'], ['zoom'],
-                  10, 1,
-                  13, 1.8,
-                  16, 2.5,
-                ],
-              }}
-            />
-            {/* Depth labels on major contours */}
-            <Layer
-              id="twdb-contour-labels"
-              type="symbol"
-              source-layer="contours"
-              filter={['==', ['get', 'level'], 1]}
-              paint={{
-                'text-color': '#ffffff',
-                'text-halo-color': '#01579b',
-                'text-halo-width': 2,
-              }}
-              layout={{
-                'symbol-placement': 'line',
-                'text-field': ['concat', ['to-string', ['get', 'depth_ft']], ' ft'],
-                'text-size': [
-                  'interpolate', ['linear'], ['zoom'],
-                  10, 10,
-                  13, 13,
-                  16, 15,
-                ],
-                'text-max-angle': 30,
-                'symbol-spacing': 200,
-              }}
-            />
-          </Source>
-        )}
+
 
         {/* Lake boundary outline */}
         {boundary && (
@@ -277,22 +283,22 @@ export function MapContainer({
 
       {/* Map type toggle */}
       <button
+        className="floating-panel"
         onClick={() => setShowSatellite(!showSatellite)}
         style={{
           position: 'absolute',
-          top: 12,
+          top: 'calc(env(safe-area-inset-top, 0px) + 12px)',
           right: 60,
-          padding: '6px 10px',
-          background: 'rgba(255,255,255,0.9)',
-          border: '1px solid #ccc',
-          borderRadius: 4,
-          fontSize: 11,
-          color: '#333',
+          padding: '8px 12px',
+          fontSize: 12,
+          fontWeight: 600,
+          letterSpacing: '0.02em',
+          color: 'var(--color-text)',
           zIndex: 10,
           cursor: 'pointer',
         }}
       >
-        {showSatellite ? 'Topo Only' : '+ Satellite'}
+        {showSatellite ? 'Topo' : 'Satellite'}
       </button>
 
       {currentWeather && (

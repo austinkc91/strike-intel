@@ -383,6 +383,35 @@ export function similarityScore(
 // Main matching function
 // ============================================================
 
+export function computeDepthChangeLookup(grid: GridCell[]): Map<number, number> {
+  const depthLookup = new Map<string, number>();
+  for (const cell of grid) {
+    depthLookup.set(`${cell.lat.toFixed(3)}_${cell.lng.toFixed(3)}`, cell.depth_ft);
+  }
+  const spacing = 0.002; // match grid resolution
+  const depthChangeLookup = new Map<number, number>();
+  for (const cell of grid) {
+    depthChangeLookup.set(cell.id, computeDepthChange(cell, depthLookup, spacing));
+  }
+  return depthChangeLookup;
+}
+
+export function findNearestCell(grid: GridCell[], lat: number, lng: number): GridCell | null {
+  if (grid.length === 0) return null;
+  let best: GridCell | null = null;
+  let bestDistSq = Infinity;
+  for (const cell of grid) {
+    const dLat = cell.lat - lat;
+    const dLng = cell.lng - lng;
+    const d = dLat * dLat + dLng * dLng;
+    if (d < bestDistSq) {
+      bestDistSq = d;
+      best = cell;
+    }
+  }
+  return best;
+}
+
 export function findSimilarSpots(
   referenceSignature: SpotSignature,
   grid: GridCell[],
@@ -393,17 +422,7 @@ export function findSimilarSpots(
   weights: PatternWeights = DEFAULT_WEIGHTS,
   threshold: number = 0.85,
 ): MatchResult[] {
-  // Pre-compute depth change for all cells
-  const depthLookup = new Map<string, number>();
-  for (const cell of grid) {
-    depthLookup.set(`${cell.lat.toFixed(3)}_${cell.lng.toFixed(3)}`, cell.depth_ft);
-  }
-
-  const spacing = 0.002; // match grid resolution
-  const depthChangeLookup = new Map<number, number>();
-  for (const cell of grid) {
-    depthChangeLookup.set(cell.id, computeDepthChange(cell, depthLookup, spacing));
-  }
+  const depthChangeLookup = computeDepthChangeLookup(grid);
 
   // Filter out very shallow cells (< 3ft) — not fishable
   const fishableCells = grid.filter(c => c.depth_ft >= 3);

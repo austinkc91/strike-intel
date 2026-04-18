@@ -33,3 +33,6 @@ server/data/shapefiles/
 server/data/processed/
 server/data/tiles/
 *.mbtiles
+
+# Firebase deploy cache
+.firebase/

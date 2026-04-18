@@ -1,4 +1,4 @@
-import { useCallback, useState, useEffect, useMemo } from 'react';
+import { useCallback, useState, useEffect } from 'react';
 import { MapContainer } from '../components/map/MapContainer';
 import { LogCatchForm } from '../components/catch/LogCatchForm';
 import { CatchDetailSheet } from '../components/catch/CatchDetailSheet';
@@ -33,7 +33,7 @@ export function MapPage() {
 
   // Fetch real depth grid for the selected lake
   const [lakeGrid, setLakeGrid] = useState<GridCell[]>([]);
-  const [gridLoading, setGridLoading] = useState(false);
+  const [_gridLoading, setGridLoading] = useState(false);
 
   useEffect(() => {
     if (!selectedLake) {
@@ -103,9 +103,9 @@ export function MapPage() {
         notes: data.notes || null,
       });
     } else {
-      await addCatch(data);
-      if (selectedLake) {
-        enrichCatch(selectedLake.id, data.location, data.timestamp);
+      const newId = await addCatch(data);
+      if (selectedLake && newId) {
+        enrichCatch(selectedLake.id, newId, data.location, data.timestamp);
       }
     }
     setPendingPin(null);
@@ -179,6 +179,7 @@ export function MapPage() {
           editCatch={editingCatchId ? catches.find(c => c.id === editingCatchId) : null}
           onSubmit={handleSubmit}
           onCancel={handleCancel}
+          onLocationChange={(loc) => setPendingPin(loc)}
         />
       )}
 
@@ -217,26 +218,24 @@ export function MapPage() {
       {/* Plan Trip button */}
       {selectedLake && !showForm && !activeCatch && !showPattern && !showTripPlan && (
         <button
+          className="floating-panel"
           onClick={() => setShowTripPlan(true)}
           style={{
             position: 'absolute',
             bottom: 20,
             left: 20,
-            padding: '10px 16px',
-            background: 'rgba(10, 25, 41, 0.85)',
-            backdropFilter: 'blur(8px)',
-            border: '1px solid var(--color-border)',
-            borderRadius: 'var(--radius)',
-            color: 'var(--color-primary)',
+            padding: '10px 14px',
+            color: 'var(--color-text)',
             fontSize: 13,
-            fontWeight: 500,
+            fontWeight: 600,
+            letterSpacing: '-0.005em',
             zIndex: 50,
             display: 'flex',
             alignItems: 'center',
-            gap: 6,
+            gap: 8,
           }}
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
             <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
             <line x1="16" y1="2" x2="16" y2="6" />
             <line x1="8" y1="2" x2="8" y2="6" />
@@ -251,21 +250,23 @@ export function MapPage() {
 
 async function enrichCatch(
   lakeId: string,
+  catchId: string,
   location: GeoPoint,
   timestamp: Date,
 ) {
   try {
-    const { collection: col, query: q, orderBy, limit, getDocs } = await import('firebase/firestore');
-    const catchesRef = col(db, 'lakes', lakeId, 'catches');
-    const snap = await getDocs(q(catchesRef, orderBy('loggedAt', 'desc'), limit(1)));
-    if (snap.empty) return;
-    const catchId = snap.docs[0].id;
     const catchRef = doc(db, 'lakes', lakeId, 'catches', catchId);
 
     // Fetch weather and spot characteristics in parallel
     const [weather, characteristics] = await Promise.all([
-      fetchWeatherForCatch(location.latitude, location.longitude, timestamp).catch(() => null),
-      fetchSpotCharacteristics(lakeId, location).catch(() => null),
+      fetchWeatherForCatch(location.latitude, location.longitude, timestamp).catch((e) => {
+        console.warn('[enrichCatch] weather fetch failed:', e);
+        return null;
+      }),
+      fetchSpotCharacteristics(lakeId, location).catch((e) => {
+        console.warn('[enrichCatch] spot characteristics fetch failed:', e);
+        return null;
+      }),
     ]);
 
     const moon = getMoonPhase(timestamp);
@@ -281,11 +282,17 @@ async function enrichCatch(
     }
     if (characteristics) {
       updates.characteristics = characteristics;
-      console.log(`[enrichCatch] Depth: ${characteristics.depth_ft}ft, Slope: ${characteristics.slope_degrees}°, Structure: ${characteristics.nearestStructureType}`);
     }
+
+    console.log('[enrichCatch]', catchId, {
+      hasWeather: !!weather,
+      hasCharacteristics: !!characteristics,
+      depth: characteristics?.depth_ft,
+      structure: characteristics?.nearestStructureType,
+    });
 
     await updateDoc(catchRef, updates);
   } catch (err) {
-    console.error('Catch enrichment failed:', err);
+    console.error('[enrichCatch] failed:', err);
   }
 }

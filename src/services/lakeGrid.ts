@@ -4,8 +4,7 @@
  */
 
 import type { GridCell } from './patternEngine';
-
-const TILE_SERVER = import.meta.env.VITE_TILE_SERVER || 'http://localhost:3001';
+import { TILE_SERVER } from './tileServer';
 
 interface DepthPoint {
   lat: number;
@@ -15,10 +14,9 @@ interface DepthPoint {
 
 interface BoundaryFeature {
   type: 'Feature';
-  geometry: {
-    type: 'Polygon' | 'MultiPolygon';
-    coordinates: number[][][];
-  };
+  geometry:
+    | { type: 'Polygon'; coordinates: number[][][] }
+    | { type: 'MultiPolygon'; coordinates: number[][][][] };
   properties: Record<string, unknown>;
 }
 

@@ -8,48 +8,46 @@ interface WindRoseProps {
 
 export function WindRose({ direction_deg, speed_mph, gusts_mph }: WindRoseProps) {
   const compass = windDirectionToCompass(direction_deg);
+  const showGusts = gusts_mph > speed_mph + 4;
 
   return (
-    <div style={{
-      position: 'absolute',
-      top: 12,
-      left: 12,
-      background: 'rgba(10, 25, 41, 0.85)',
-      backdropFilter: 'blur(8px)',
-      borderRadius: 'var(--radius)',
-      padding: '8px 12px',
-      zIndex: 10,
-      display: 'flex',
-      alignItems: 'center',
-      gap: 10,
-      border: '1px solid var(--color-border)',
-    }}>
-      {/* Compass with arrow */}
-      <div style={{ position: 'relative', width: 40, height: 40 }}>
-        <svg width="40" height="40" viewBox="0 0 40 40">
-          {/* Compass circle */}
-          <circle cx="20" cy="20" r="18" fill="none" stroke="var(--color-border)" strokeWidth="1" />
-          {/* Cardinal marks */}
-          <text x="20" y="6" textAnchor="middle" fill="var(--color-text-secondary)" fontSize="7">N</text>
-          <text x="36" y="22" textAnchor="middle" fill="var(--color-text-secondary)" fontSize="7">E</text>
-          <text x="20" y="38" textAnchor="middle" fill="var(--color-text-secondary)" fontSize="7">S</text>
-          <text x="4" y="22" textAnchor="middle" fill="var(--color-text-secondary)" fontSize="7">W</text>
-          {/* Wind direction arrow (points where wind is coming FROM) */}
-          <g transform={`rotate(${direction_deg}, 20, 20)`}>
-            <line x1="20" y1="8" x2="20" y2="28" stroke="var(--color-primary)" strokeWidth="2" />
-            <polygon points="20,8 16,15 24,15" fill="var(--color-primary)" />
+    <div
+      className="floating-panel"
+      style={{
+        position: 'absolute',
+        top: 'calc(env(safe-area-inset-top, 0px) + 12px)',
+        left: 12,
+        padding: '10px 12px 10px 10px',
+        zIndex: 10,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+      }}
+    >
+      <div style={{ position: 'relative', width: 38, height: 38 }}>
+        <svg width="38" height="38" viewBox="0 0 38 38">
+          <circle cx="19" cy="19" r="17" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="1" />
+          <text x="19" y="6.5" textAnchor="middle" fill="var(--color-text-subtle)" fontSize="6.5" fontWeight="600">N</text>
+          <text x="33.5" y="21" textAnchor="middle" fill="var(--color-text-subtle)" fontSize="6.5" fontWeight="600">E</text>
+          <text x="19" y="35.5" textAnchor="middle" fill="var(--color-text-subtle)" fontSize="6.5" fontWeight="600">S</text>
+          <text x="4.5" y="21" textAnchor="middle" fill="var(--color-text-subtle)" fontSize="6.5" fontWeight="600">W</text>
+          <g transform={`rotate(${direction_deg}, 19, 19)`}>
+            <line x1="19" y1="8" x2="19" y2="27" stroke="var(--color-accent)" strokeWidth="2" strokeLinecap="round" />
+            <polygon points="19,7 15.5,14 22.5,14" fill="var(--color-accent)" />
           </g>
         </svg>
       </div>
 
-      {/* Wind info */}
       <div>
-        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-text)' }}>
-          {compass} {speed_mph} mph
+        <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--color-text)', letterSpacing: '-0.01em', lineHeight: 1.1 }}>
+          {compass} {Math.round(speed_mph)}
+          <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--color-text-muted)', marginLeft: 3 }}>mph</span>
         </div>
-        <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
-          Gusts {gusts_mph} mph
-        </div>
+        {showGusts && (
+          <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 2 }}>
+            Gusts {Math.round(gusts_mph)} mph
+          </div>
+        )}
       </div>
     </div>
   );

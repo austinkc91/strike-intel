@@ -12,7 +12,7 @@ export default defineConfig({
         name: 'Strike Intel',
         short_name: 'Strike Intel',
         description: 'Pattern-based freshwater fishing intelligence',
-        start_url: '/map',
+        start_url: '/',
         display: 'standalone',
         orientation: 'portrait',
         theme_color: '#0f2942',

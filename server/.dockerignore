@@ -1,0 +1,14 @@
+node_modules
+npm-debug.log
+.DS_Store
+.git
+.gitignore
+Dockerfile
+.dockerignore
+README.md
+# Guard against any future reappearance of build-time-only data
+data/shapefiles
+data/raw
+data/clipped
+data/_work
+data/contours

@@ -57,12 +57,20 @@ export function useCatches(lakeId: string | null) {
 
       let photoUrl: string | null = null;
       if (data.photo) {
-        const photoRef = ref(
-          storage,
-          `catches/${lakeId}/${user.uid}/${Date.now()}_${data.photo.name}`,
-        );
-        await uploadBytes(photoRef, data.photo);
-        photoUrl = await getDownloadURL(photoRef);
+        try {
+          const photoRef = ref(
+            storage,
+            `catches/${lakeId}/${user.uid}/${Date.now()}_${data.photo.name}`,
+          );
+          const uploadPromise = uploadBytes(photoRef, data.photo);
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Photo upload timed out')), 15000),
+          );
+          await Promise.race([uploadPromise, timeoutPromise]);
+          photoUrl = await getDownloadURL(photoRef);
+        } catch (err) {
+          console.warn('Photo upload failed, saving catch without photo:', err);
+        }
       }
 
       const catchDoc = {
@@ -85,7 +93,8 @@ export function useCatches(lakeId: string | null) {
         solunar: null,
       };
 
-      await addDoc(collection(db, 'lakes', lakeId, 'catches'), catchDoc);
+      const docRef = await addDoc(collection(db, 'lakes', lakeId, 'catches'), catchDoc);
+      return docRef.id;
     },
     [lakeId],
   );

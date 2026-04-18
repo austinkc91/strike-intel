@@ -4,8 +4,7 @@
  */
 
 import type { CatchCharacteristics, GeoPoint } from '../types';
-
-const TILE_SERVER = import.meta.env.VITE_TILE_SERVER || 'http://localhost:3001';
+import { TILE_SERVER } from './tileServer';
 
 interface DepthResult {
   depth_ft: number | null;

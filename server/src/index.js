@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const zlib = require('zlib');
 const Database = require('better-sqlite3');
 
 const app = express();
@@ -15,6 +16,12 @@ app.use((req, res, next) => {
   console.log(`${req.method} ${req.url}`);
   next();
 });
+
+const api = express.Router();
+app.use('/api', api);
+
+// Health check for Cloud Run
+app.get('/', (_req, res) => res.json({ ok: true, service: 'strike-intel-api' }));
 
 // ============================================================
 // Data directories
@@ -84,7 +91,7 @@ function loadDepthIndex(lakeId) {
 // ============================================================
 
 // GET /lakes - list available lakes with data
-app.get('/lakes', (req, res) => {
+api.get('/lakes', (req, res) => {
   const lakes = [];
   if (!fs.existsSync(PROCESSED_DIR)) return res.json(lakes);
 
@@ -106,7 +113,7 @@ app.get('/lakes', (req, res) => {
 });
 
 // GET /tiles/:lakeId/:z/:x/:y.pbf - serve vector tiles from MBTiles
-app.get('/tiles/:lakeId/:z/:x/:y.pbf', (req, res) => {
+api.get('/tiles/:lakeId/:z/:x/:y.pbf', (req, res) => {
   const { lakeId, z, x, y } = req.params;
   const db = getTileDB(lakeId);
 
@@ -125,18 +132,33 @@ app.get('/tiles/:lakeId/:z/:x/:y.pbf', (req, res) => {
     return res.status(204).send();
   }
 
-  res.set({
-    'Content-Type': 'application/x-protobuf',
-    'Content-Encoding': 'gzip',
-    'Cache-Control': 'public, max-age=86400',
-    'Access-Control-Allow-Origin': '*',
-  });
+  // Check if client accepts gzip — if not, decompress
+  const acceptsGzip = (req.headers['accept-encoding'] || '').includes('gzip');
 
-  res.send(row.tile_data);
+  if (acceptsGzip) {
+    res.set({
+      'Content-Type': 'application/x-protobuf',
+      'Content-Encoding': 'gzip',
+      'Cache-Control': 'public, max-age=86400',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.send(row.tile_data);
+  } else {
+    // Decompress for clients that don't handle gzip well
+    zlib.gunzip(row.tile_data, (err, decompressed) => {
+      if (err) {
+        res.set({ 'Content-Type': 'application/x-protobuf', 'Content-Encoding': 'gzip', 'Access-Control-Allow-Origin': '*' });
+        res.send(row.tile_data);
+      } else {
+        res.set({ 'Content-Type': 'application/x-protobuf', 'Cache-Control': 'public, max-age=86400', 'Access-Control-Allow-Origin': '*' });
+        res.send(decompressed);
+      }
+    });
+  }
 });
 
 // GET /depth?lat=X&lng=Y&lake=lakeId - query depth at a point
-app.get('/depth', (req, res) => {
+api.get('/depth', (req, res) => {
   const { lat, lng, lake } = req.query;
 
   if (!lat || !lng || !lake) {
@@ -163,7 +185,7 @@ app.get('/depth', (req, res) => {
 
 // GET /depth/area?lake=X&bbox=west,south,east,north&resolution=N
 // Returns a grid of depth values for pattern engine
-app.get('/depth/area', (req, res) => {
+api.get('/depth/area', (req, res) => {
   const { lake, bbox, resolution } = req.query;
 
   if (!lake || !bbox) {
@@ -202,7 +224,7 @@ app.get('/depth/area', (req, res) => {
 });
 
 // GET /contours?lake=X&bbox=west,south,east,north - return contour GeoJSON in bbox
-app.get('/contours', (req, res) => {
+api.get('/contours', (req, res) => {
   const { lake, bbox } = req.query;
 
   if (!lake) {
@@ -242,7 +264,7 @@ app.get('/contours', (req, res) => {
 });
 
 // GET /boundary?lake=X - return lake boundary GeoJSON
-app.get('/boundary', (req, res) => {
+api.get('/boundary', (req, res) => {
   const { lake } = req.query;
   if (!lake) return res.status(400).json({ error: 'Required: lake' });
 
@@ -324,7 +346,7 @@ function haversineDistance(lat1, lng1, lat2, lng2) {
 // ============================================================
 // Start server
 // ============================================================
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   // List available lakes
   const lakes = fs.existsSync(TILES_DIR)
     ? fs.readdirSync(TILES_DIR).filter(f => f.endsWith('.mbtiles')).map(f => f.replace('.mbtiles', ''))
@@ -333,12 +355,12 @@ app.listen(PORT, () => {
   console.log(`\nStrike Intel Tile Server running on http://localhost:${PORT}`);
   console.log(`Available lakes (${lakes.length}):`);
   lakes.forEach(l => console.log(`  - ${l}`));
-  console.log(`\nEndpoints:`);
-  console.log(`  GET /lakes                          - List available lakes`);
-  console.log(`  GET /tiles/:lake/:z/:x/:y.pbf       - Vector contour tiles`);
-  console.log(`  GET /depth?lat=X&lng=Y&lake=ID      - Depth at point`);
-  console.log(`  GET /depth/area?lake=ID&bbox=W,S,E,N - Depth grid for area`);
-  console.log(`  GET /contours?lake=ID&bbox=W,S,E,N  - Contour GeoJSON`);
-  console.log(`  GET /boundary?lake=ID               - Lake boundary`);
+  console.log(`\nEndpoints (all prefixed with /api):`);
+  console.log(`  GET /api/lakes                          - List available lakes`);
+  console.log(`  GET /api/tiles/:lake/:z/:x/:y.pbf       - Vector contour tiles`);
+  console.log(`  GET /api/depth?lat=X&lng=Y&lake=ID      - Depth at point`);
+  console.log(`  GET /api/depth/area?lake=ID&bbox=W,S,E,N - Depth grid for area`);
+  console.log(`  GET /api/contours?lake=ID&bbox=W,S,E,N  - Contour GeoJSON`);
+  console.log(`  GET /api/boundary?lake=ID               - Lake boundary`);
   console.log('');
 });

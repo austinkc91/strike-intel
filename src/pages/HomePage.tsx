@@ -1,126 +1,146 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../store';
+import { getMoonPhase, moonPhaseEmoji } from '../services/moonPhase';
+import { getSolunarWindows, isInFeedingWindow } from '../services/solunar';
+import {
+  fetchWeatherForCatch,
+  windDirectionToCompass,
+  conditionLabel,
+  pressureTrendSymbol,
+} from '../services/weather';
+import { SolunarTimeline } from '../components/weather/SolunarTimeline';
+import type { CatchWeather } from '../types';
+
+// ============================================================
+// Lake data
+// ============================================================
 
 const DEMO_LAKES = [
-  // === TEXAS ===
   { id: 'lake-texoma', name: 'Lake Texoma', state: 'TX/OK', center: { latitude: 33.82, longitude: -96.57 }, area_acres: 89000 },
-  { id: 'lake-fork', name: 'Lake Fork', state: 'TX', center: { latitude: 32.77, longitude: -95.56 }, area_acres: 27690 },
-  { id: 'sam-rayburn', name: 'Sam Rayburn Reservoir', state: 'TX', center: { latitude: 31.10, longitude: -94.20 }, area_acres: 114500 },
-  { id: 'toledo-bend', name: 'Toledo Bend', state: 'TX/LA', center: { latitude: 31.30, longitude: -93.72 }, area_acres: 185000 },
-  { id: 'falcon-lake', name: 'Falcon Lake', state: 'TX', center: { latitude: 26.60, longitude: -99.20 }, area_acres: 83654 },
-  { id: 'lake-amistad', name: 'Lake Amistad', state: 'TX', center: { latitude: 29.47, longitude: -101.05 }, area_acres: 64900 },
-  { id: 'lake-ray-roberts', name: 'Lake Ray Roberts', state: 'TX', center: { latitude: 33.35, longitude: -97.05 }, area_acres: 29350 },
-  { id: 'lake-conroe', name: 'Lake Conroe', state: 'TX', center: { latitude: 30.40, longitude: -95.57 }, area_acres: 20985 },
-  { id: 'lake-livingston', name: 'Lake Livingston', state: 'TX', center: { latitude: 30.80, longitude: -95.00 }, area_acres: 83277 },
-  { id: 'lake-travis', name: 'Lake Travis', state: 'TX', center: { latitude: 30.43, longitude: -97.90 }, area_acres: 18930 },
-  { id: 'lake-buchanan', name: 'Lake Buchanan', state: 'TX', center: { latitude: 30.80, longitude: -98.42 }, area_acres: 22333 },
-  { id: 'lake-lbj', name: 'Lake LBJ', state: 'TX', center: { latitude: 30.58, longitude: -98.35 }, area_acres: 6375 },
-  { id: 'possum-kingdom', name: 'Possum Kingdom Lake', state: 'TX', center: { latitude: 32.87, longitude: -98.50 }, area_acres: 17700 },
-  { id: 'lake-whitney', name: 'Lake Whitney', state: 'TX', center: { latitude: 31.90, longitude: -97.38 }, area_acres: 23560 },
-  { id: 'richland-chambers', name: 'Richland-Chambers Reservoir', state: 'TX', center: { latitude: 31.97, longitude: -96.13 }, area_acres: 44752 },
-  { id: 'lake-tawakoni', name: 'Lake Tawakoni', state: 'TX', center: { latitude: 32.85, longitude: -95.95 }, area_acres: 36700 },
-  { id: 'lake-oivie', name: 'O.H. Ivie Reservoir', state: 'TX', center: { latitude: 31.57, longitude: -99.70 }, area_acres: 19149 },
-  { id: 'cedar-creek', name: 'Cedar Creek Reservoir', state: 'TX', center: { latitude: 32.35, longitude: -96.10 }, area_acres: 33750 },
-  { id: 'lake-bob-sandlin', name: 'Lake Bob Sandlin', state: 'TX', center: { latitude: 33.05, longitude: -95.00 }, area_acres: 9460 },
-  { id: 'choke-canyon', name: 'Choke Canyon Reservoir', state: 'TX', center: { latitude: 28.48, longitude: -98.30 }, area_acres: 25670 },
-  { id: 'lake-palestine', name: 'Lake Palestine', state: 'TX', center: { latitude: 32.10, longitude: -95.55 }, area_acres: 25560 },
-  { id: 'lake-belton', name: 'Lake Belton', state: 'TX', center: { latitude: 31.10, longitude: -97.48 }, area_acres: 12385 },
-  { id: 'lake-somerville', name: 'Lake Somerville', state: 'TX', center: { latitude: 30.33, longitude: -96.55 }, area_acres: 11460 },
-  { id: 'lake-alan-henry', name: 'Lake Alan Henry', state: 'TX', center: { latitude: 33.07, longitude: -101.05 }, area_acres: 2880 },
-  { id: 'lake-houston', name: 'Lake Houston', state: 'TX', center: { latitude: 30.05, longitude: -95.15 }, area_acres: 12240 },
-  { id: 'eagle-mountain', name: 'Eagle Mountain Lake', state: 'TX', center: { latitude: 32.90, longitude: -97.47 }, area_acres: 8738 },
-  { id: 'lake-lewisville', name: 'Lake Lewisville', state: 'TX', center: { latitude: 33.10, longitude: -96.97 }, area_acres: 29592 },
-  { id: 'lake-lavon', name: 'Lake Lavon', state: 'TX', center: { latitude: 33.05, longitude: -96.48 }, area_acres: 21400 },
-  { id: 'joe-pool', name: 'Joe Pool Lake', state: 'TX', center: { latitude: 32.62, longitude: -97.00 }, area_acres: 7470 },
-  { id: 'lake-granbury', name: 'Lake Granbury', state: 'TX', center: { latitude: 32.42, longitude: -97.72 }, area_acres: 8310 },
-  { id: 'lake-bridgeport', name: 'Lake Bridgeport', state: 'TX', center: { latitude: 33.22, longitude: -97.78 }, area_acres: 11954 },
-  { id: 'lake-benbrook', name: 'Lake Benbrook', state: 'TX', center: { latitude: 32.62, longitude: -97.45 }, area_acres: 3770 },
-  // === OTHER STATES ===
-  { id: 'table-rock', name: 'Table Rock Lake', state: 'MO', center: { latitude: 36.60, longitude: -93.35 }, area_acres: 43100 },
-  { id: 'lake-guntersville', name: 'Lake Guntersville', state: 'AL', center: { latitude: 34.39, longitude: -86.22 }, area_acres: 69100 },
-  { id: 'lake-erie', name: 'Lake Erie', state: 'OH/PA/NY', center: { latitude: 42.20, longitude: -81.20 }, area_acres: 6400000 },
-  { id: 'lake-okeechobee', name: 'Lake Okeechobee', state: 'FL', center: { latitude: 26.95, longitude: -80.80 }, area_acres: 467200 },
-  { id: 'kentucky-lake', name: 'Kentucky Lake', state: 'KY/TN', center: { latitude: 36.60, longitude: -88.10 }, area_acres: 160300 },
-  { id: 'lake-st-clair', name: 'Lake St. Clair', state: 'MI', center: { latitude: 42.43, longitude: -82.67 }, area_acres: 275000 },
-  { id: 'lake-champlain', name: 'Lake Champlain', state: 'VT/NY', center: { latitude: 44.53, longitude: -73.33 }, area_acres: 271000 },
-  { id: 'mille-lacs', name: 'Mille Lacs Lake', state: 'MN', center: { latitude: 46.22, longitude: -93.60 }, area_acres: 132500 },
-  { id: 'lake-of-the-ozarks', name: 'Lake of the Ozarks', state: 'MO', center: { latitude: 38.12, longitude: -92.68 }, area_acres: 54000 },
-  { id: 'dale-hollow', name: 'Dale Hollow Lake', state: 'TN/KY', center: { latitude: 36.55, longitude: -85.45 }, area_acres: 27700 },
-  { id: 'pickwick-lake', name: 'Pickwick Lake', state: 'AL/TN/MS', center: { latitude: 34.85, longitude: -88.05 }, area_acres: 43100 },
 ];
 
-function distanceMiles(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const dLat = (lat2 - lat1) * 69;
-  const dLng = (lng2 - lng1) * 69 * Math.cos((lat1 * Math.PI) / 180);
-  return Math.sqrt(dLat * dLat + dLng * dLng);
+type DemoLake = (typeof DEMO_LAKES)[number];
+
+// ============================================================
+// Fishing quality scoring
+// ============================================================
+
+interface FishingQualityResult {
+  label: string;
+  tone: 'good' | 'great' | 'fair' | 'slow' | 'elite';
+  color: string;
+  warnings: string[];
+  tips: string[];
 }
+
+function fishingQuality(solunarRating: number, weather?: CatchWeather | null): FishingQualityResult {
+  let score = solunarRating;
+  const warnings: string[] = [];
+  const tips: string[] = [];
+
+  if (weather) {
+    const temp = weather.temp_f;
+    const wind = weather.wind_speed_mph;
+    const gusts = weather.wind_gusts_mph;
+
+    if (weather.pressure_trend === 'falling') {
+      score += 0.8;
+      tips.push('Pressure falling — active pre-front bite likely.');
+    } else if (weather.pressure_trend === 'rising') {
+      tips.push('Pressure rising — post-front, fish may be sluggish.');
+    }
+
+    if (weather.condition === 'overcast') {
+      score += 0.5;
+      tips.push('Overcast — fish roam and feed more openly.');
+    } else if (weather.condition === 'partly_cloudy') {
+      score += 0.3;
+    } else if (weather.condition === 'clear') {
+      tips.push('Clear skies — fish will hold tight to structure.');
+    } else if (weather.condition === 'rain') {
+      score += 0.2;
+      tips.push('Rain — topwater can fire, try moving baits.');
+    } else if (weather.condition === 'storm') {
+      score -= 2;
+      warnings.push('Thunderstorms — stay off the water.');
+    }
+
+    if (temp >= 55 && temp <= 80) score += 0.3;
+    else if (temp >= 45 && temp < 55) { score -= 0.2; tips.push('Cool water — slow presentations, fish deeper.'); }
+    else if (temp > 80 && temp <= 95) { score -= 0.2; tips.push('Hot — fish early morning or near thermoclines.'); }
+    else if (temp > 95) { score -= 0.8; warnings.push('Extreme heat — fish deep and early.'); }
+    else if (temp < 45) { score -= 0.8; tips.push('Cold water — finesse tactics needed.'); }
+
+    if (wind >= 5 && wind <= 15) { score += 0.3; tips.push('Moderate wind — breaks up the surface.'); }
+    else if (wind > 15 && wind <= 25) { score -= 0.2; warnings.push(`Wind ${Math.round(wind)} mph — choppy, heavier tackle.`); }
+    else if (wind > 25) { score -= 1.0; warnings.push(`Wind ${Math.round(wind)} mph — dangerous on open water.`); }
+
+    if (gusts > 35) { score -= 0.5; warnings.push(`Gusts to ${Math.round(gusts)} mph — small boats should stay in.`); }
+    if (weather.precipitation_in > 0.5) warnings.push('Heavy rain expected.');
+
+    const month = new Date().getMonth();
+    if (month >= 2 && month <= 4) score += 0.3;
+    else if (month >= 8 && month <= 10) score += 0.3;
+  }
+
+  score = Math.max(0, Math.min(6, score));
+
+  if (score >= 4.5) return { label: 'Elite', tone: 'elite', color: '#4ade80', warnings, tips };
+  if (score >= 3.5) return { label: 'Great', tone: 'great', color: '#4ade80', warnings, tips };
+  if (score >= 2.5) return { label: 'Good', tone: 'good', color: '#5eb8e6', warnings, tips };
+  if (score >= 1.5) return { label: 'Fair', tone: 'fair', color: '#fbbf24', warnings, tips };
+  return { label: 'Slow', tone: 'slow', color: '#8a9ba8', warnings, tips };
+}
+
+// ============================================================
+// Component
+// ============================================================
 
 export function HomePage() {
   const navigate = useNavigate();
   const { setSelectedLake, setMapCenter, setMapZoom } = useAppStore();
-  const [search, setSearch] = useState('');
+  const [weather, setWeather] = useState<CatchWeather | null>(null);
   const [userLat, setUserLat] = useState<number | null>(null);
-  const [userLng, setUserLng] = useState<number | null>(null);
-  const [geoStatus, setGeoStatus] = useState<'idle' | 'loading' | 'done' | 'denied'>('idle');
 
-  // Get user location on mount
+  const now = useMemo(() => new Date(), []);
+  const moon = useMemo(() => getMoonPhase(now), []);
+  const solunar = useMemo(() => getSolunarWindows(now, userLat ?? 32.8), [userLat]);
+  const feedingStatus = useMemo(() => isInFeedingWindow(now, solunar.windows), [solunar]);
+
   useEffect(() => {
     if (!navigator.geolocation) return;
-    setGeoStatus('loading');
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setUserLat(pos.coords.latitude);
-        setUserLng(pos.coords.longitude);
-        setGeoStatus('done');
-      },
-      () => setGeoStatus('denied'),
+      (pos) => setUserLat(pos.coords.latitude),
+      () => {},
       { enableHighAccuracy: false, timeout: 5000, maximumAge: 300000 },
     );
   }, []);
 
-  const sorted = useMemo(() => {
-    let list = [...DEMO_LAKES];
+  const lake = DEMO_LAKES[0];
 
-    // Filter by search
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      list = list.filter(
-        (l) =>
-          l.name.toLowerCase().includes(q) ||
-          l.state.toLowerCase().includes(q),
-      );
-    }
+  useEffect(() => {
+    fetchWeatherForCatch(lake.center.latitude, lake.center.longitude, now)
+      .then((w) => {
+        const m = getMoonPhase(now);
+        setWeather({ ...w, moon_phase: m.phase, water_temp_f: null } as CatchWeather);
+      })
+      .catch(() => {});
+  }, []);
 
-    // Sort by distance if we have user location
-    if (userLat != null && userLng != null) {
-      list.sort((a, b) => {
-        const distA = distanceMiles(userLat, userLng, a.center.latitude, a.center.longitude);
-        const distB = distanceMiles(userLat, userLng, b.center.latitude, b.center.longitude);
-        return distA - distB;
-      });
-    }
+  const quality = fishingQuality(solunar.rating, weather);
 
-    return list;
-  }, [search, userLat, userLng]);
-
-  const getDistanceLabel = (lake: (typeof DEMO_LAKES)[0]): string | null => {
-    if (userLat == null || userLng == null) return null;
-    const d = distanceMiles(userLat, userLng, lake.center.latitude, lake.center.longitude);
-    return d < 1 ? '<1 mi' : `${Math.round(d)} mi`;
-  };
-
-  const handleLakeSelect = (lake: (typeof DEMO_LAKES)[0]) => {
+  const handleGoToMap = (l: DemoLake) => {
     setSelectedLake({
-      id: lake.id,
-      name: lake.name,
-      state: lake.state,
-      center: lake.center,
+      id: l.id,
+      name: l.name,
+      state: l.state,
+      center: l.center,
       bounds: {
-        ne: { latitude: lake.center.latitude + 0.1, longitude: lake.center.longitude + 0.1 },
-        sw: { latitude: lake.center.latitude - 0.1, longitude: lake.center.longitude - 0.1 },
+        ne: { latitude: l.center.latitude + 0.1, longitude: l.center.longitude + 0.1 },
+        sw: { latitude: l.center.latitude - 0.1, longitude: l.center.longitude - 0.1 },
       },
-      area_acres: lake.area_acres,
+      area_acres: l.area_acres,
       max_depth_ft: null,
       bathymetrySource: null,
       bathymetryTileUrl: null,
@@ -128,75 +148,155 @@ export function HomePage() {
       species: [],
       usgsStationId: null,
     });
-    setMapCenter([lake.center.longitude, lake.center.latitude]);
+    setMapCenter([l.center.longitude, l.center.latitude]);
     setMapZoom(12);
     navigate('/map');
   };
 
   return (
-    <div className="page">
-      <h1 className="page-header">Strike Intel</h1>
-      <p style={{ color: 'var(--color-text-secondary)', marginBottom: 24, fontSize: 14 }}>
-        Pattern-based freshwater fishing intelligence. Select a lake to get started.
-      </p>
-
-      <div className="lake-search">
-        <input
-          type="text"
-          placeholder="Search lakes..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
+    <div className="page page-top">
+      {/* Header */}
+      <div className="page-header">
+        <div>
+          <div className="eyebrow">Strike Intel</div>
+          <h1 className="display" style={{ marginTop: 2 }}>{lake.name}</h1>
+          <div className="meta" style={{ marginTop: 4 }}>
+            {lake.state} · {lake.area_acres.toLocaleString()} acres
+          </div>
+        </div>
       </div>
 
-      <h3 style={{ fontSize: 14, color: 'var(--color-text-secondary)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 }}>
-        {search.trim()
-          ? `Results (${sorted.length})`
-          : geoStatus === 'done'
-            ? 'Near You'
-            : geoStatus === 'loading'
-              ? 'Finding nearby lakes...'
-              : 'All Lakes'}
-      </h3>
+      {/* Hero conditions card */}
+      <div className="card-raised section">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18 }}>
+          <div>
+            <div className="eyebrow">Today</div>
+            <div style={{ marginTop: 4, fontSize: 32, fontWeight: 700, letterSpacing: '-0.03em', color: quality.color, lineHeight: 1.1 }}>
+              {quality.label}
+            </div>
+            <div className="meta" style={{ marginTop: 2 }}>
+              {now.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}
+            </div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 34, lineHeight: 1 }}>{moonPhaseEmoji(moon.phase)}</div>
+            <div className="meta" style={{ marginTop: 4 }}>
+              {moon.phase}
+            </div>
+          </div>
+        </div>
 
-      {sorted.length === 0 && (
-        <div style={{ color: 'var(--color-text-secondary)', padding: 20, textAlign: 'center' }}>
-          No lakes found matching "{search}"
+        {/* Solunar rating */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+          <div style={{ fontSize: 16, letterSpacing: 3 }}>
+            {Array.from({ length: 5 }, (_, i) => (
+              <span key={i} style={{ color: i < solunar.rating ? '#fbbf24' : 'rgba(255,255,255,0.12)' }}>
+                {i < solunar.rating ? '★' : '☆'}
+              </span>
+            ))}
+          </div>
+          <div className="meta">Solunar</div>
+        </div>
+
+        {/* Feeding window */}
+        {feedingStatus.period !== 'none' ? (
+          <div className="badge badge-good" style={{ marginBottom: 14 }}>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--color-good)', boxShadow: '0 0 0 3px rgba(74,222,128,0.25)' }} />
+            In a {feedingStatus.period} feeding window
+          </div>
+        ) : feedingStatus.minutesToWindow < 120 ? (
+          <div className="badge badge-accent" style={{ marginBottom: 14 }}>
+            Next window in {feedingStatus.minutesToWindow} min
+          </div>
+        ) : null}
+
+        {/* Weather stats */}
+        {weather ? (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, paddingTop: 14, borderTop: '1px solid var(--color-border)' }}>
+            <Stat label="Temp" value={`${Math.round(weather.temp_f)}°`} sub={conditionLabel(weather.condition)} />
+            <Stat
+              label="Wind"
+              value={`${Math.round(weather.wind_speed_mph)}`}
+              sub={`${windDirectionToCompass(weather.wind_direction_deg)} · ${weather.wind_gusts_mph > weather.wind_speed_mph + 5 ? `g${Math.round(weather.wind_gusts_mph)}` : 'mph'}`}
+            />
+            <Stat
+              label="Pressure"
+              value={`${Math.round(weather.pressure_hpa)}`}
+              sub={`${weather.pressure_trend} ${pressureTrendSymbol(weather.pressure_trend)}`}
+            />
+            <Stat label="Cloud" value={`${Math.round(weather.cloud_cover_pct)}%`} sub={weather.condition === 'clear' ? 'clear' : 'cover'} />
+          </div>
+        ) : (
+          <div className="meta" style={{ paddingTop: 14, borderTop: '1px solid var(--color-border)' }}>Loading conditions...</div>
+        )}
+      </div>
+
+      {/* Warnings */}
+      {quality.warnings.length > 0 && (
+        <div className="section stack stack-gap-2">
+          {quality.warnings.map((w, i) => (
+            <div key={i} className="card" style={{ borderColor: 'rgba(248,113,113,0.25)', background: 'rgba(248,113,113,0.08)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 4, height: 28, background: 'var(--color-danger)', borderRadius: 2, flexShrink: 0 }} />
+                <div style={{ fontSize: 13, color: '#fecaca', fontWeight: 500 }}>{w}</div>
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
-      {sorted.map((lake) => {
-        const dist = getDistanceLabel(lake);
-        return (
-          <button
-            key={lake.id}
-            onClick={() => handleLakeSelect(lake)}
-            style={{
-              display: 'block',
-              width: '100%',
-              textAlign: 'left',
-              padding: '14px 16px',
-              background: 'var(--color-surface)',
-              border: '1px solid var(--color-border)',
-              borderRadius: 'var(--radius)',
-              color: 'var(--color-text)',
-              marginBottom: 8,
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ fontWeight: 600, marginBottom: 2 }}>{lake.name}</div>
-              {dist && (
-                <span style={{ fontSize: 12, color: 'var(--color-primary)', flexShrink: 0 }}>
-                  {dist}
-                </span>
-              )}
-            </div>
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-              {lake.state} - {lake.area_acres.toLocaleString()} acres
-            </div>
-          </button>
-        );
-      })}
+      {/* Tips */}
+      {quality.tips.length > 0 && (
+        <div className="section">
+          <div className="section-header">
+            <div className="eyebrow">Today's Playbook</div>
+          </div>
+          <div className="stack stack-gap-2">
+            {quality.tips.slice(0, 3).map((t, i) => (
+              <div key={i} className="card" style={{ padding: '10px 14px' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                  <div style={{ width: 4, height: 18, background: 'var(--color-accent)', borderRadius: 2, marginTop: 2, flexShrink: 0 }} />
+                  <div style={{ fontSize: 13, color: 'var(--color-text)', lineHeight: 1.5 }}>{t}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Solunar timeline */}
+      <div className="section">
+        <div className="section-header">
+          <div className="eyebrow">Solunar Windows</div>
+        </div>
+        <div className="card">
+          <SolunarTimeline windows={solunar.windows} rating={solunar.rating} currentTime={now} />
+        </div>
+      </div>
+
+      {/* Primary CTA */}
+      <button className="btn btn-primary btn-lg btn-block" onClick={() => handleGoToMap(lake)}>
+        Open {lake.name}
+        <span style={{ marginLeft: 4 }}>→</span>
+      </button>
+    </div>
+  );
+}
+
+function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div>
+      <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.12em', color: 'var(--color-text-subtle)', marginBottom: 3 }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--color-text)' }}>
+        {value}
+      </div>
+      {sub && (
+        <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {sub}
+        </div>
+      )}
     </div>
   );
 }
