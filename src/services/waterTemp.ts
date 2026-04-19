@@ -41,6 +41,38 @@ export async function fetchWaterTemp(
   }
 }
 
+interface CachedStation {
+  siteId: string;
+  siteName: string;
+}
+
+// Cache nearest-station lookup per rounded lat/lng so we don't re-discover
+// every page load. null = confirmed no station available.
+const nearestStationCache = new Map<string, CachedStation | null>();
+
+/**
+ * Convenience: find the nearest USGS water-temp station for a lat/lng
+ * (cached after first call) and return the current water temperature.
+ */
+export async function fetchCurrentWaterTempNear(
+  lat: number,
+  lng: number,
+): Promise<{ temp_f: number; timestamp: Date; stationName: string } | null> {
+  const key = `${lat.toFixed(2)}_${lng.toFixed(2)}`;
+  let station = nearestStationCache.get(key);
+  if (station === undefined) {
+    const stations = await findNearbyWaterTempStations(lat, lng, 30);
+    station = stations.length > 0
+      ? { siteId: stations[0].siteId, siteName: stations[0].siteName }
+      : null;
+    nearestStationCache.set(key, station);
+  }
+  if (!station) return null;
+  const result = await fetchWaterTemp(station.siteId);
+  if (!result) return null;
+  return { ...result, stationName: station.siteName };
+}
+
 // Search for USGS stations near a lat/lng
 export async function findNearbyWaterTempStations(
   lat: number,

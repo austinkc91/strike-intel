@@ -17,7 +17,7 @@ export function CatchDetailSheet({ catchData, onClose, onFindSimilar, onEdit, on
   const [confirmDelete, setConfirmDelete] = useState(false);
   const timestamp = catchData.timestamp?.toDate?.() || new Date();
   const moon = getMoonPhase(timestamp);
-  const solunar = getSolunarWindows(timestamp, catchData.location.latitude);
+  const solunar = getSolunarWindows(timestamp, catchData.location.latitude, catchData.location.longitude);
 
   return (
     <div className="bottom-sheet">

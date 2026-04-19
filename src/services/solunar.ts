@@ -2,6 +2,11 @@
 // Major periods: moon overhead (transit) and moon underfoot (opposite transit)
 // Minor periods: moonrise and moonset
 // Each window is approximately 1-2 hours
+//
+// Astronomy is computed via suncalc (see src/services/astronomy.ts) — accurate
+// to within a minute for moonrise, moonset, and transit at any latitude.
+
+import { getDayInfo } from './astronomy';
 
 export interface SolunarWindow {
   start: Date;
@@ -15,56 +20,18 @@ export interface SolunarDay {
   rating: number; // 1-5 (5 = best fishing, new/full moon)
 }
 
-// Approximate moon transit times using lunar day offset
-// One lunar day = ~24h 50m (moon rises ~50 min later each day)
-function getMoonTimes(date: Date, latitude: number): {
-  rise: Date | null;
-  set: Date | null;
-  transit: Date;
-  underfoot: Date;
-} {
-  // Reference: Jan 6, 2000 moonrise at lat 0 was ~06:00 UTC
-  const refDate = new Date(Date.UTC(2000, 0, 6, 6, 0, 0));
-  const diffMs = date.getTime() - refDate.getTime();
-  const lunarDayMs = (24 * 60 + 50) * 60 * 1000;
-  const dayOffset = diffMs % lunarDayMs;
-
-  // Moonrise time for this day (approximate)
-  const dayStart = new Date(date);
-  dayStart.setHours(0, 0, 0, 0);
-
-  const riseOffset = dayOffset;
-  const riseTime = new Date(dayStart.getTime() + (riseOffset % (24 * 60 * 60 * 1000)));
-
-  // Moon transit is ~6.2 hours after rise
-  const transitTime = new Date(riseTime.getTime() + 6.2 * 60 * 60 * 1000);
-
-  // Moonset is ~12.4 hours after rise
-  const setTime = new Date(riseTime.getTime() + 12.4 * 60 * 60 * 1000);
-
-  // Underfoot is ~12.4 hours after transit (opposite side)
-  const underfootTime = new Date(transitTime.getTime() + 12.4 * 60 * 60 * 1000);
-
-  // Latitude adjustment (rough): higher latitudes shift times
-  const latAdjustMs = (latitude / 90) * 30 * 60 * 1000; // up to 30 min shift
-  riseTime.setTime(riseTime.getTime() + latAdjustMs);
-  transitTime.setTime(transitTime.getTime() + latAdjustMs);
-  setTime.setTime(setTime.getTime() + latAdjustMs);
-  underfootTime.setTime(underfootTime.getTime() + latAdjustMs);
-
-  return {
-    rise: riseTime,
-    set: setTime,
-    transit: transitTime,
-    underfoot: underfootTime,
-  };
-}
-
 export function getSolunarWindows(
   date: Date,
   latitude: number,
+  longitude = -96.57, // default to Texoma longitude; callers should pass real lng
 ): SolunarDay {
-  const moonTimes = getMoonTimes(date, latitude);
+  const info = getDayInfo(date, latitude, longitude);
+  const moonTimes = {
+    rise: info.moonrise,
+    set: info.moonset,
+    transit: info.moonTransit,
+    underfoot: info.moonUnderfoot,
+  };
   const windows: SolunarWindow[] = [];
 
   const majorDurationMs = 2 * 60 * 60 * 1000; // 2 hours

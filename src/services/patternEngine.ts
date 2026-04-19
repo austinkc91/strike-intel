@@ -137,8 +137,22 @@ export const SPECIES_WEIGHTS: Record<string, Partial<PatternWeights>> = {
   },
 };
 
+// Map fishScoring.Species short keys to the SPECIES_WEIGHTS display-name keys
+// so the trip planner can reuse the same weight profiles without duplicating.
+const SPECIES_KEY_ALIAS: Record<string, string> = {
+  striper: 'Striped Bass',
+  largemouth: 'Largemouth Bass',
+  smallmouth: 'Smallmouth Bass',
+  walleye: 'Walleye',
+  crappie: 'Crappie',
+  catfish: 'Channel Catfish',
+  bluegill: 'Bluegill',
+};
+
 export function getSpeciesWeights(species: string | null): PatternWeights {
-  const overrides = species ? SPECIES_WEIGHTS[species] : undefined;
+  if (!species) return { ...DEFAULT_WEIGHTS };
+  const key = SPECIES_WEIGHTS[species] ? species : SPECIES_KEY_ALIAS[species];
+  const overrides = key ? SPECIES_WEIGHTS[key] : undefined;
   if (!overrides) return { ...DEFAULT_WEIGHTS };
   return { ...DEFAULT_WEIGHTS, ...overrides };
 }
@@ -548,4 +562,87 @@ export function clusterHotspots(
 // Keep generateDemoGrid for backwards compatibility (unused but harmless)
 export function generateDemoGrid(): GridCell[] {
   return [];
+}
+
+// ============================================================
+// Default signatures — used by the Trip Planner when the user has no logged
+// catches yet. Per-species seed targets adapted to the day's conditions so
+// even a brand-new user gets a sensible starting list of spots.
+// ============================================================
+
+export interface DayConditions {
+  airTempF: number;
+  waterTempF: number | null;
+  windSpeedMph: number;
+  cloudCoverPct: number;
+}
+
+interface DefaultSeed {
+  depthFt: number;          // target seed depth
+  slopeDeg: number;
+  dropoffDistFt: number;    // smaller = closer = stronger preference
+  channelDistFt: number;
+  pointDistFt: number;
+  shorelineDistFt: number;
+  windExposure: number;
+  windAdvantage: number;
+}
+
+// Tuned for deep Texas reservoirs (e.g. Texoma). Starting depths sit in the
+// 12–18 ft band that covers a striper's main-lake structure preference and a
+// largemouth's classic point/dropoff window. Easy to retune from feedback.
+const DEFAULT_SEEDS: Record<string, DefaultSeed> = {
+  striper:    { depthFt: 25, slopeDeg: 4, dropoffDistFt: 200, channelDistFt: 150, pointDistFt: 600, shorelineDistFt: 1200, windExposure: 0.7, windAdvantage: 0.6 },
+  largemouth: { depthFt: 12, slopeDeg: 6, dropoffDistFt: 150, channelDistFt: 600, pointDistFt: 200, shorelineDistFt: 400,  windExposure: 0.5, windAdvantage: 0.7 },
+  smallmouth: { depthFt: 15, slopeDeg: 8, dropoffDistFt: 100, channelDistFt: 500, pointDistFt: 200, shorelineDistFt: 500,  windExposure: 0.6, windAdvantage: 0.7 },
+  crappie:    { depthFt: 14, slopeDeg: 3, dropoffDistFt: 250, channelDistFt: 300, pointDistFt: 400, shorelineDistFt: 700,  windExposure: 0.3, windAdvantage: 0.4 },
+  walleye:    { depthFt: 18, slopeDeg: 5, dropoffDistFt: 150, channelDistFt: 250, pointDistFt: 350, shorelineDistFt: 800,  windExposure: 0.6, windAdvantage: 0.7 },
+  catfish:    { depthFt: 22, slopeDeg: 3, dropoffDistFt: 300, channelDistFt: 100, pointDistFt: 700, shorelineDistFt: 900,  windExposure: 0.4, windAdvantage: 0.3 },
+  bluegill:   { depthFt: 6,  slopeDeg: 3, dropoffDistFt: 600, channelDistFt: 1000, pointDistFt: 500, shorelineDistFt: 150, windExposure: 0.3, windAdvantage: 0.5 },
+};
+
+const COLD_OPTIMUM_LOW: Record<string, number> = {
+  striper: 60, largemouth: 65, smallmouth: 60, crappie: 58, walleye: 60, catfish: 70, bluegill: 65,
+};
+
+/**
+ * Build a SpotSignature from the per-species default seed, nudged by today's
+ * conditions: bright/hot pushes deeper; cold water pushes shallower (sun-
+ * warmed flats); wind direction is handled by findSimilarSpots' wind arg.
+ */
+export function defaultSignatureFor(
+  species: string,
+  conditions: DayConditions,
+  timestamp: Date,
+  moonIllumination: number,
+  ranges: NormRanges,
+): SpotSignature {
+  const seed = DEFAULT_SEEDS[species] ?? DEFAULT_SEEDS.largemouth;
+  let depth = seed.depthFt;
+
+  // Bright + hot midday → push deeper to find the cooler thermocline edge
+  if (conditions.cloudCoverPct < 25 && conditions.airTempF > 85) {
+    depth += 5;
+  }
+  // Cold water (below species' optimum) → fish are likely shallower on
+  // sun-warmed flats. Don't push shallower than 4 ft.
+  const coldLow = COLD_OPTIMUM_LOW[species] ?? 65;
+  if (conditions.waterTempF != null && conditions.waterTempF < coldLow) {
+    depth = Math.max(4, depth - 4);
+  }
+
+  return buildSignature(
+    depth,
+    seed.slopeDeg,
+    seed.dropoffDistFt,
+    seed.channelDistFt,
+    seed.pointDistFt,
+    seed.shorelineDistFt,
+    seed.windExposure,
+    timestamp,
+    moonIllumination,
+    ranges,
+    /* depthChange_ft */ 4, // mid-range structure transition
+    seed.windAdvantage,
+  );
 }

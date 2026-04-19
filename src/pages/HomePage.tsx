@@ -3,26 +3,25 @@ import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../store';
 import { getMoonPhase, moonPhaseEmoji } from '../services/moonPhase';
 import { getSolunarWindows, isInFeedingWindow } from '../services/solunar';
+import { getDayInfo, hoursOfDay } from '../services/astronomy';
 import {
   fetchWeatherForCatch,
-  windDirectionToCompass,
-  conditionLabel,
-  pressureTrendSymbol,
+  fetchPressureHistory,
+  type PressureHistory,
 } from '../services/weather';
 import { SolunarArc } from '../components/weather/SolunarArc';
+import { PressureSparkline } from '../components/weather/PressureSparkline';
+import { WeekForecast } from '../components/weather/WeekForecast';
+import { ConditionsStrip } from '../components/weather/ConditionsStrip';
 import { Logo } from '../components/common/Logo';
-import { scoreFishingDay, SPECIES_LABELS, type Species } from '../services/fishScoring';
+import { SpeciesPills } from '../components/common/SpeciesPills';
+import { HourlyScoreChart } from '../components/trip/HourlyScoreChart';
+import { fetchCurrentWaterTempNear } from '../services/waterTemp';
+import { computeWeeklyForecast, type ForecastDay } from '../services/forecast';
+import { computeHourlyScores, findBestWindows, type HourScore } from '../services/hourlyScores';
+import { scoreFishingDay, SPECIES_LABELS } from '../services/fishScoring';
+import { LAKE_TEXOMA as LAKE } from '../data/lakes';
 import type { CatchWeather } from '../types';
-
-const LAKE = {
-  id: 'lake-texoma',
-  name: 'Lake Texoma',
-  state: 'TX/OK',
-  center: { latitude: 33.82, longitude: -96.57 },
-  area_acres: 89000,
-};
-
-const SPECIES_LIST: Species[] = ['striper', 'largemouth', 'crappie', 'walleye', 'catfish'];
 
 // ============================================================
 // Time-of-day sky gradient
@@ -123,11 +122,23 @@ function ActivityRing({ score, color }: { score: number; color: string }) {
           marginTop: 4,
           textTransform: 'uppercase',
         }}>
-          out of 100
+          right now
         </div>
       </div>
     </div>
   );
+}
+
+function formatPeakHour(h: number): string {
+  if (h === 0) return '12am';
+  if (h === 12) return '12pm';
+  return h < 12 ? `${h}am` : `${h - 12}pm`;
+}
+
+function isSameDay(a: Date, b: Date): boolean {
+  return a.getFullYear() === b.getFullYear()
+    && a.getMonth() === b.getMonth()
+    && a.getDate() === b.getDate();
 }
 
 // ============================================================
@@ -136,55 +147,112 @@ function ActivityRing({ score, color }: { score: number; color: string }) {
 
 export function HomePage() {
   const navigate = useNavigate();
-  const { setSelectedLake, setMapCenter, setMapZoom } = useAppStore();
+  const { setSelectedLake, setMapCenter, setMapZoom, selectedSpecies, setSelectedSpecies } = useAppStore();
+  const species = selectedSpecies;
+  const setSpecies = setSelectedSpecies;
   const [weather, setWeather] = useState<CatchWeather | null>(null);
-  const [userLat, setUserLat] = useState<number | null>(null);
+  const [waterTempF, setWaterTempF] = useState<number | null>(null);
+  const [pressureHistory, setPressureHistory] = useState<PressureHistory | null>(null);
+  const [weekForecast, setWeekForecast] = useState<ForecastDay[]>([]);
+  const [todayHourly, setTodayHourly] = useState<HourScore[]>([]);
   const [breakdownOpen, setBreakdownOpen] = useState(false);
-  const [species, setSpecies] = useState<Species>('striper');
 
   const now = useMemo(() => new Date(), []);
   const hour = now.getHours();
   const moon = useMemo(() => getMoonPhase(now), []);
-  const solunar = useMemo(() => getSolunarWindows(now, userLat ?? LAKE.center.latitude), [userLat]);
+  const solunar = useMemo(
+    () => getSolunarWindows(now, LAKE.center.latitude, LAKE.center.longitude),
+    [],
+  );
+  const dayInfo = useMemo(
+    () => getDayInfo(now, LAKE.center.latitude, LAKE.center.longitude),
+    [],
+  );
   const feedingStatus = useMemo(() => isInFeedingWindow(now, solunar.windows), [solunar]);
 
   useEffect(() => {
-    if (!navigator.geolocation) return;
-    navigator.geolocation.getCurrentPosition(
-      (pos) => setUserLat(pos.coords.latitude),
-      () => {},
-      { enableHighAccuracy: false, timeout: 5000, maximumAge: 300000 },
-    );
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const w = await fetchWeatherForCatch(LAKE.center.latitude, LAKE.center.longitude, now);
+        const m = getMoonPhase(now);
+        if (cancelled) return;
+        setWeather({ ...w, moon_phase: m.phase, water_temp_f: null } as CatchWeather);
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    (async () => {
+      try {
+        const wt = await fetchCurrentWaterTempNear(LAKE.center.latitude, LAKE.center.longitude);
+        if (cancelled || !wt) return;
+        setWaterTempF(wt.temp_f);
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    fetchPressureHistory(LAKE.center.latitude, LAKE.center.longitude)
+      .then((h) => { if (!cancelled) setPressureHistory(h); })
+      .catch(() => {});
+
+    return () => { cancelled = true; };
   }, []);
 
+  // 7-day forecast recomputes when species changes or water temp arrives,
+  // since both feed into the per-day score.
   useEffect(() => {
-    fetchWeatherForCatch(LAKE.center.latitude, LAKE.center.longitude, now)
-      .then((w) => {
-        const m = getMoonPhase(now);
-        setWeather({ ...w, moon_phase: m.phase, water_temp_f: null } as CatchWeather);
-      })
+    let cancelled = false;
+    computeWeeklyForecast(LAKE.center.latitude, LAKE.center.longitude, species, waterTempF)
+      .then((days) => { if (!cancelled) setWeekForecast(days); })
       .catch(() => {});
-  }, []);
+    return () => { cancelled = true; };
+  }, [species, waterTempF]);
+
+  // Today's hourly score curve so the user can see when the day peaks without
+  // having to open the trip planner. Reuses the cached Open-Meteo hourly fetch
+  // shared with the weekly forecast — no extra network.
+  useEffect(() => {
+    let cancelled = false;
+    computeHourlyScores(LAKE.center.latitude, LAKE.center.longitude, species, now, waterTempF)
+      .then((hours) => { if (!cancelled) setTodayHourly(hours); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [species, waterTempF, now]);
+
+  // Merge live water temp into the weather payload the scoring engine reads.
+  const weatherWithWater = useMemo<CatchWeather | null>(
+    () => weather ? { ...weather, water_temp_f: waterTempF } : null,
+    [weather, waterTempF],
+  );
+
+  // Today's peak from the 7-day outlook — used to reconcile the "right now"
+  // hero score with the day's best window so users don't see a 35 next to a 99
+  // and assume the app is broken.
+  const todayPeak = useMemo(() => {
+    if (weekForecast.length === 0) return null;
+    const today = weekForecast.find((d) => isSameDay(d.date, now));
+    return today ?? weekForecast[0];
+  }, [weekForecast, now]);
 
   const result = useMemo(() => scoreFishingDay({
     species,
-    weather,
+    weather: weatherWithWater,
+    pressureTrendRate: pressureHistory?.trendRate,
     solunarRating: solunar.rating,
     inFeedingWindow: feedingStatus.period,
     moonIllumination: moon.illumination,
     now,
-  }), [species, weather, solunar.rating, feedingStatus.period, moon.illumination]);
+    sunriseHour: hoursOfDay(dayInfo.sunrise),
+    sunsetHour: hoursOfDay(dayInfo.sunset),
+  }), [species, weatherWithWater, pressureHistory, solunar.rating, feedingStatus.period, moon.illumination, dayInfo]);
 
   const handleGoToMap = () => {
-    setSelectedLake({
-      id: LAKE.id, name: LAKE.name, state: LAKE.state, center: LAKE.center,
-      bounds: {
-        ne: { latitude: LAKE.center.latitude + 0.1, longitude: LAKE.center.longitude + 0.1 },
-        sw: { latitude: LAKE.center.latitude - 0.1, longitude: LAKE.center.longitude - 0.1 },
-      },
-      area_acres: LAKE.area_acres, max_depth_ft: null, bathymetrySource: null,
-      bathymetryTileUrl: null, shorelineGeoJSON: null, species: [], usgsStationId: null,
-    });
+    // Lake is already pre-selected in the store on app load; just recentre
+    // the map (in case the user moved it) and navigate.
+    setSelectedLake(LAKE);
     setMapCenter([LAKE.center.longitude, LAKE.center.latitude]);
     setMapZoom(12);
     navigate('/map');
@@ -241,37 +309,31 @@ export function HomePage() {
           }}>
             {result.label} for {SPECIES_LABELS[species].toLowerCase()}
           </div>
+          {todayPeak && todayPeak.score > result.score + 8 && (
+            <div className="meta" style={{ marginTop: 6, fontSize: 12 }}>
+              Peaks at <span style={{ color: todayPeak.color, fontWeight: 700 }}>{todayPeak.score}</span> around{' '}
+              <span style={{ color: 'var(--color-text)', fontWeight: 600 }}>{formatPeakHour(todayPeak.peakHour)}</span>
+            </div>
+          )}
         </div>
 
         {/* Species toggle */}
-        <div style={{
-          position: 'relative',
-          display: 'flex',
-          gap: 6,
-          overflowX: 'auto',
-          paddingBottom: 4,
-        }} className="hide-scrollbar">
-          {SPECIES_LIST.map((s) => (
-            <button
-              key={s}
-              onClick={() => setSpecies(s)}
-              style={{
-                flexShrink: 0,
-                padding: '7px 14px',
-                borderRadius: 999,
-                fontSize: 12,
-                fontWeight: 600,
-                letterSpacing: '-0.005em',
-                background: s === species ? result.color : 'rgba(255,255,255,0.05)',
-                color: s === species ? '#041322' : 'var(--color-text-muted)',
-                border: `1px solid ${s === species ? result.color : 'var(--color-border-strong)'}`,
-                transition: 'all 0.15s',
-              }}
-            >
-              {SPECIES_LABELS[s]}
-            </button>
-          ))}
+        <div style={{ position: 'relative' }}>
+          <SpeciesPills species={species} onChange={setSpecies} accentColor={result.color} />
         </div>
+
+        {/* Today's hourly outlook — at-a-glance "when is the bite on today" */}
+        {todayHourly.length > 0 && (
+          <div style={{ position: 'relative', marginTop: 16 }}>
+            <div className="eyebrow" style={{ marginBottom: 6, color: 'var(--color-text-subtle)' }}>
+              Today by the hour
+            </div>
+            <HourlyScoreChart
+              hours={todayHourly}
+              bestWindows={findBestWindows(todayHourly, 3)}
+            />
+          </div>
+        )}
 
         {/* Feeding window pill / breakdown toggle */}
         <div style={{ position: 'relative', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14 }}>
@@ -372,27 +434,28 @@ export function HomePage() {
         {/* Conditions strip */}
         {weather ? (
           <div className="card section" style={{ marginTop: 16 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'stretch' }}>
-              <Stat label="Temp" value={`${Math.round(weather.temp_f)}°`} sub={conditionLabel(weather.condition)} />
-              <StatDivider />
-              <Stat
-                label="Wind"
-                value={`${Math.round(weather.wind_speed_mph)}`}
-                sub={`${windDirectionToCompass(weather.wind_direction_deg)}${weather.wind_gusts_mph > weather.wind_speed_mph + 5 ? ` · g${Math.round(weather.wind_gusts_mph)}` : ' · mph'}`}
-              />
-              <StatDivider />
-              <Stat
-                label="Pressure"
-                value={`${Math.round(weather.pressure_hpa)}`}
-                sub={`${weather.pressure_trend} ${pressureTrendSymbol(weather.pressure_trend)}`}
-              />
-              <StatDivider />
-              <Stat label="Cloud" value={`${Math.round(weather.cloud_cover_pct)}%`} sub="cover" />
-            </div>
+            <ConditionsStrip weather={weather} waterTempF={waterTempF} />
           </div>
         ) : (
           <div className="card section" style={{ marginTop: 16 }}>
             <div className="meta">Loading conditions…</div>
+          </div>
+        )}
+
+        {/* Pressure sparkline */}
+        {pressureHistory && (
+          <div className="card section">
+            <PressureSparkline history={pressureHistory} />
+          </div>
+        )}
+
+        {/* 7-day forecast */}
+        {weekForecast.length > 0 && (
+          <div className="section">
+            <div className="section-header">
+              <div className="eyebrow">7-day outlook · {SPECIES_LABELS[species]}</div>
+            </div>
+            <WeekForecast days={weekForecast} />
           </div>
         )}
 
@@ -407,7 +470,12 @@ export function HomePage() {
             </div>
           </div>
           <div className="card">
-            <SolunarArc windows={solunar.windows} currentTime={now} />
+            <SolunarArc
+              windows={solunar.windows}
+              currentTime={now}
+              sunrise={dayInfo.sunrise}
+              sunset={dayInfo.sunset}
+            />
           </div>
         </div>
 
@@ -458,34 +526,3 @@ export function HomePage() {
   );
 }
 
-function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div style={{ flex: 1, minWidth: 0, padding: '0 4px' }}>
-      <div style={{
-        fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.12em',
-        color: 'var(--color-text-subtle)', marginBottom: 4,
-      }}>
-        {label}
-      </div>
-      <div style={{
-        fontFamily: 'var(--font-display)',
-        fontSize: 22, fontWeight: 700, letterSpacing: '-0.02em',
-        color: 'var(--color-text)', lineHeight: 1.1,
-      }}>
-        {value}
-      </div>
-      {sub && (
-        <div style={{
-          fontSize: 11, color: 'var(--color-text-muted)', marginTop: 2,
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-        }}>
-          {sub}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function StatDivider() {
-  return <div style={{ width: 1, background: 'var(--color-border)', alignSelf: 'stretch' }} />;
-}

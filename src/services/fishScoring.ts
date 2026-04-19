@@ -93,14 +93,52 @@ export interface ScoreInputs {
 }
 
 // ============================================================
+// Thermocline estimator — rough seasonal / surface-temp model tuned
+// for deep Texas reservoirs like Texoma. Returns a human-readable hint
+// only when stratification is developed enough to matter; otherwise
+// returns null (spring/winter when the lake is well-mixed).
+// ============================================================
+
+export function estimateThermocline(surfaceF: number, month: number): string | null {
+  // Well-mixed season: no thermocline to speak of
+  if (month <= 2 || month >= 10) return null;
+  if (surfaceF < 70) return null;
+
+  // As surface temp climbs through summer, the thermocline sets up
+  // progressively shallower. These ranges follow Texoma TPWD profile
+  // summaries — rough but directionally correct.
+  let top: number, bottom: number;
+  if (surfaceF < 74) {
+    top = 22; bottom = 30;
+  } else if (surfaceF < 80) {
+    top = 18; bottom = 25;
+  } else if (surfaceF < 86) {
+    top = 15; bottom = 22;
+  } else {
+    top = 12; bottom = 18;
+  }
+  return `Thermocline likely at ${top}–${bottom} ft — game fish hold above it; below is oxygen-starved.`;
+}
+
+// ============================================================
 // Per-factor scorers — each returns delta + briefing
 // ============================================================
 
-function scoreTemp(species: Species, tempF: number | null | undefined): { factor: Factor; tip?: Briefing } | null {
-  if (tempF == null) return null;
+function scoreTemp(
+  species: Species,
+  waterF: number | null | undefined,
+  airF: number | null | undefined,
+): { factor: Factor; tip?: Briefing } | null {
+  // Prefer water temp when we have it — that's what fish actually respond to.
+  // Fall back to air temp as a proxy, but weight the factor a bit lower in
+  // that case (handled by caller via deviation from delta).
+  const isWater = waterF != null && Number.isFinite(waterF);
+  const tempF = isWater ? (waterF as number) : airF;
+  if (tempF == null || !Number.isFinite(tempF)) return null;
   const c = TEMP_BY_SPECIES[species];
+  const tempKind = isWater ? 'Water' : 'Air';
   let delta = 0;
-  let label = `Water ~${Math.round(tempF)}°F`;
+  let label = `${tempKind} ${Math.round(tempF)}°F`;
   let tone: FactorTone = 'neutral';
   let tip: Briefing | undefined;
 
@@ -113,22 +151,26 @@ function scoreTemp(species: Species, tempF: number | null | undefined): { factor
     const t = (tempF - c.cold) / (c.optimumLow - c.cold);
     delta = -10 + t * 18; // -10 to +8
     tone = delta >= 0 ? 'positive' : 'negative';
-    label = `Cool ${Math.round(tempF)}°F`;
+    label = `${tempKind} ${Math.round(tempF)}°F — cool`;
   } else if (tempF <= c.optimumHigh) {
     delta = 16;
     tone = 'positive';
-    label = `Optimal ${Math.round(tempF)}°F for ${SPECIES_LABELS[species].toLowerCase()}`;
+    label = `${tempKind} ${Math.round(tempF)}°F — optimal for ${SPECIES_LABELS[species].toLowerCase()}`;
   } else if (tempF <= c.hot) {
     const t = (tempF - c.optimumHigh) / (c.hot - c.optimumHigh);
     delta = 8 - t * 18; // +8 to -10
     tone = delta >= 0 ? 'positive' : 'negative';
-    label = `Warm ${Math.round(tempF)}°F`;
+    label = `${tempKind} ${Math.round(tempF)}°F — warm`;
     if (delta < 0) tip = { level: 'tip', text: 'Warming past optimum — target deeper, cooler structure.' };
   } else {
     delta = -16;
     tone = 'negative';
     tip = { level: 'tip', text: `${Math.round(tempF)}°F is thermal stress — fish dawn/dusk and deep.` };
   }
+
+  // Discount the score contribution slightly when we're using air temp as a
+  // proxy — it's less trustworthy than actual water temperature.
+  if (!isWater) delta *= 0.7;
 
   return {
     factor: { key: 'temp', label, delta: Math.round(delta * 10) / 10, tone, weight: 20 },
@@ -336,10 +378,20 @@ export function scoreFishingDay(inputs: ScoreInputs): FishScoreResult {
   const month = inputs.now.getMonth();
 
   // Temperature
-  const tempR = scoreTemp(inputs.species, w?.temp_f);
+  const tempR = scoreTemp(inputs.species, w?.water_temp_f, w?.temp_f);
   if (tempR) {
     factors.push(tempR.factor);
     if (tempR.tip) briefing.push(tempR.tip);
+  }
+
+  // Thermocline hint — deep Texas reservoirs stratify when surface
+  // water runs hot. Only relevant when we have real water temperature.
+  const waterTemp = w?.water_temp_f;
+  if (waterTemp != null && Number.isFinite(waterTemp)) {
+    const thermoclineHint = estimateThermocline(waterTemp, month);
+    if (thermoclineHint) {
+      briefing.push({ level: 'tip', text: thermoclineHint });
+    }
   }
 
   // Pressure

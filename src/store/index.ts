@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import type { Lake, Catch, GeoPoint } from '../types';
+import type { Species } from '../services/fishScoring';
+import { LAKE_TEXOMA } from '../data/lakes';
 
 interface AppState {
   selectedLake: Lake | null;
@@ -24,10 +26,17 @@ interface AppState {
 
   mapZoom: number;
   setMapZoom: (zoom: number) => void;
+
+  // The species the user is targeting. Shared across Home and Trip Planner so
+  // switching on one screen carries over to the other.
+  selectedSpecies: Species;
+  setSelectedSpecies: (s: Species) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
-  selectedLake: null,
+  // Single-lake build: default the store to Texoma so Map/Catches render
+  // immediately without requiring a pick from Home first.
+  selectedLake: LAKE_TEXOMA,
   setSelectedLake: (lake) => set({ selectedLake: lake }),
 
   activeCatch: null,
@@ -42,9 +51,12 @@ export const useAppStore = create<AppState>((set) => ({
   isLogging: false,
   setIsLogging: (v) => set({ isLogging: v }),
 
-  mapCenter: [-98.5, 39.8], // center of US
+  mapCenter: [LAKE_TEXOMA.center.longitude, LAKE_TEXOMA.center.latitude],
   setMapCenter: (center) => set({ mapCenter: center }),
 
-  mapZoom: 4,
+  mapZoom: 12,
   setMapZoom: (zoom) => set({ mapZoom: zoom }),
+
+  selectedSpecies: 'striper',
+  setSelectedSpecies: (s) => set({ selectedSpecies: s }),
 }));

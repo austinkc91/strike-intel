@@ -13,6 +13,7 @@ import { getSolunarWindows, isInFeedingWindow } from '../services/solunar';
 import { type GridCell, type MatchResult } from '../services/patternEngine';
 import { fetchLakeGrid } from '../services/lakeGrid';
 import { fetchSpotCharacteristics } from '../services/spotCharacteristics';
+import { fetchCurrentWaterTempNear } from '../services/waterTemp';
 import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import type { Catch, CatchFormData, GeoPoint, CatchWeather } from '../types';
@@ -269,8 +270,8 @@ async function enrichCatch(
   try {
     const catchRef = doc(db, 'lakes', lakeId, 'catches', catchId);
 
-    // Fetch weather and spot characteristics in parallel
-    const [weather, characteristics] = await Promise.all([
+    // Fetch weather, spot characteristics, and water temp in parallel
+    const [weather, characteristics, waterTemp] = await Promise.all([
       fetchWeatherForCatch(location.latitude, location.longitude, timestamp).catch((e) => {
         console.warn('[enrichCatch] weather fetch failed:', e);
         return null;
@@ -279,10 +280,14 @@ async function enrichCatch(
         console.warn('[enrichCatch] spot characteristics fetch failed:', e);
         return null;
       }),
+      fetchCurrentWaterTempNear(location.latitude, location.longitude).catch((e) => {
+        console.warn('[enrichCatch] water temp fetch failed:', e);
+        return null;
+      }),
     ]);
 
     const moon = getMoonPhase(timestamp);
-    const solunar = getSolunarWindows(timestamp, location.latitude);
+    const solunar = getSolunarWindows(timestamp, location.latitude, location.longitude);
     const feedingStatus = isInFeedingWindow(timestamp, solunar.windows);
 
     const updates: Record<string, unknown> = {
@@ -290,7 +295,11 @@ async function enrichCatch(
     };
 
     if (weather) {
-      updates.weather = { ...weather, moon_phase: moon.phase, water_temp_f: null };
+      updates.weather = {
+        ...weather,
+        moon_phase: moon.phase,
+        water_temp_f: waterTemp?.temp_f ?? null,
+      };
     }
     if (characteristics) {
       updates.characteristics = characteristics;
@@ -299,6 +308,7 @@ async function enrichCatch(
     console.log('[enrichCatch]', catchId, {
       hasWeather: !!weather,
       hasCharacteristics: !!characteristics,
+      waterTempF: waterTemp?.temp_f ?? null,
       depth: characteristics?.depth_ft,
       structure: characteristics?.nearestStructureType,
     });

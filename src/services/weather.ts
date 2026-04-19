@@ -66,12 +66,33 @@ function findClosestHourIndex(times: string[], targetDate: Date): number {
   return closest;
 }
 
+// Local-calendar YYYY-MM-DD. Don't use toISOString() — that returns the UTC
+// date, which can roll forward a day for evening timestamps and made the
+// archive query land on the wrong calendar day.
+function localDateStr(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function addDays(d: Date, n: number): Date {
+  const r = new Date(d);
+  r.setDate(r.getDate() + n);
+  return r;
+}
+
 export async function fetchWeatherForCatch(
   lat: number,
   lng: number,
   timestamp: Date,
 ): Promise<Omit<CatchWeather, 'moon_phase' | 'water_temp_f'>> {
-  const dateStr = timestamp.toISOString().slice(0, 10);
+  // Pad the request by ±1 day so the closest-hour search has neighbours
+  // even at midnight edges, and so any small timezone skew between the
+  // browser and the lake's local timezone (timezone=auto on Open-Meteo)
+  // doesn't strand us in an empty range.
+  const startStr = localDateStr(addDays(timestamp, -1));
+  const endStr = localDateStr(addDays(timestamp, 1));
 
   // Use archive for past dates, forecast for today/future
   const now = new Date();
@@ -88,16 +109,9 @@ export async function fetchWeatherForCatch(
     wind_speed_unit: 'mph',
     precipitation_unit: 'inch',
     timezone: 'auto',
+    start_date: startStr,
+    end_date: endStr,
   });
-
-  if (isHistorical) {
-    params.set('start_date', dateStr);
-    params.set('end_date', dateStr);
-  } else {
-    // Forecast API needs a date range that includes today
-    params.set('start_date', dateStr);
-    params.set('end_date', dateStr);
-  }
 
   const res = await fetch(`${baseUrl}?${params}`);
   if (!res.ok) {
@@ -164,4 +178,74 @@ export function pressureTrendSymbol(t: PressureTrend): string {
     case 'falling': return '\u2193';
     case 'stable': return '\u2192';
   }
+}
+
+// ============================================================
+// Pressure history (last 24h + next 12h) for the sparkline
+// ============================================================
+
+export interface PressurePoint {
+  time: Date;
+  hpa: number;
+}
+
+export interface PressureHistory {
+  points: PressurePoint[];
+  nowIndex: number;       // index in points closest to now
+  trendRate: number;      // hPa per 3 hours (positive = rising)
+  minHpa: number;
+  maxHpa: number;
+}
+
+/**
+ * Fetches last 24 hr + next 12 hr of sea-level pressure for a lat/lng.
+ * Returns the series plus a derived 3-hr rate-of-change suitable for
+ * feeding into scoreFishingDay.
+ */
+export async function fetchPressureHistory(lat: number, lng: number): Promise<PressureHistory> {
+  const params = new URLSearchParams({
+    latitude: lat.toString(),
+    longitude: lng.toString(),
+    hourly: 'pressure_msl',
+    past_days: '1',
+    forecast_days: '1',
+    timezone: 'auto',
+  });
+  const res = await fetch(`${FORECAST_URL}?${params}`);
+  if (!res.ok) throw new Error(`Pressure fetch failed: ${res.status}`);
+  const data = await res.json();
+  const times: string[] = data.hourly?.time ?? [];
+  const pressures: number[] = data.hourly?.pressure_msl ?? [];
+  if (times.length === 0 || pressures.length === 0) {
+    throw new Error('No pressure data returned');
+  }
+
+  const nowIndex = findClosestHourIndex(times, new Date());
+
+  // Slice to 24h back + 12h forward from `now`
+  const startIdx = Math.max(0, nowIndex - 24);
+  const endIdx = Math.min(times.length, nowIndex + 13);
+  const points: PressurePoint[] = [];
+  for (let i = startIdx; i < endIdx; i++) {
+    points.push({ time: new Date(times[i]), hpa: pressures[i] });
+  }
+  const adjustedNowIndex = nowIndex - startIdx;
+
+  // 3hr trend rate: current vs 3hr ago
+  const threeHoursAgo = Math.max(0, adjustedNowIndex - 3);
+  const trendRate = points[adjustedNowIndex].hpa - points[threeHoursAgo].hpa;
+
+  let minHpa = Infinity, maxHpa = -Infinity;
+  for (const p of points) {
+    if (p.hpa < minHpa) minHpa = p.hpa;
+    if (p.hpa > maxHpa) maxHpa = p.hpa;
+  }
+
+  return {
+    points,
+    nowIndex: adjustedNowIndex,
+    trendRate: Math.round(trendRate * 10) / 10,
+    minHpa,
+    maxHpa,
+  };
 }
