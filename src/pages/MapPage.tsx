@@ -288,6 +288,13 @@ async function enrichCatch(
   try {
     const catchRef = doc(db, 'lakes', lakeId, 'catches', catchId);
 
+    console.log('[enrichCatch] START', catchId, {
+      timestamp: timestamp.toISOString(),
+      timestampLocal: timestamp.toString(),
+      lat: location.latitude,
+      lng: location.longitude,
+    });
+
     // Fetch weather, spot characteristics, and water temp in parallel.
     // All three honor the catch's timestamp so a backdated log gets the
     // historical conditions, not "now."
@@ -325,15 +332,27 @@ async function enrichCatch(
       updates.characteristics = characteristics;
     }
 
-    console.log('[enrichCatch]', catchId, {
-      hasWeather: !!weather,
-      hasCharacteristics: !!characteristics,
-      waterTempF: waterTemp?.temp_f ?? null,
-      depth: characteristics?.depth_ft,
+    console.log('[enrichCatch] FETCH RESULTS', catchId, {
+      timestamp: timestamp.toISOString(),
+      airTempF: weather?.temp_f ?? 'NO WEATHER',
+      windMph: weather?.wind_speed_mph,
+      windDeg: weather?.wind_direction_deg,
+      pressureHpa: weather?.pressure_hpa,
+      pressureTrend: weather?.pressure_trend,
+      condition: weather?.condition,
+      cloudPct: weather?.cloud_cover_pct,
+      precipIn: weather?.precipitation_in,
+      waterTempF: waterTemp?.temp_f ?? 'NO WATER TEMP',
+      waterTempStation: waterTemp?.stationName,
+      waterTempReadingTime: waterTemp?.timestamp?.toISOString(),
+      moonPhase: moon.phase,
+      solunarPeriod: feedingStatus.period,
+      depthFt: characteristics?.depth_ft,
       structure: characteristics?.nearestStructureType,
     });
 
     await updateDoc(catchRef, updates);
+    console.log('[enrichCatch] WROTE', catchId, 'fields:', Object.keys(updates));
   } catch (err) {
     console.error('[enrichCatch] failed:', err);
   }

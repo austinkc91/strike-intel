@@ -251,9 +251,12 @@ export function LogCatchForm({ initialLocation, initialTimestamp, editCatch, onS
         />
       </div>
 
-      {/* Date & Time */}
+      {/* Date & Time — render the local-calendar date, not toISOString()
+          (which serialises to UTC and rolled the day forward for evening
+          timestamps, making the picker show the wrong day). */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-        <input type="date" value={timestamp.toISOString().slice(0, 10)}
+        <input type="date"
+          value={`${timestamp.getFullYear()}-${String(timestamp.getMonth() + 1).padStart(2, '0')}-${String(timestamp.getDate()).padStart(2, '0')}`}
           onChange={(e) => { const [y, m, d] = e.target.value.split('-').map(Number); const n = new Date(timestamp); n.setFullYear(y, m - 1, d); setTimestamp(n); }}
           style={{ ...inputStyle, flex: 1, colorScheme: 'dark' }} />
         <input type="time" value={`${String(timestamp.getHours()).padStart(2, '0')}:${String(timestamp.getMinutes()).padStart(2, '0')}`}
