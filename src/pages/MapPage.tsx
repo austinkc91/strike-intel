@@ -13,7 +13,7 @@ import { getSolunarWindows, isInFeedingWindow } from '../services/solunar';
 import { type GridCell, type MatchResult } from '../services/patternEngine';
 import { fetchLakeGrid } from '../services/lakeGrid';
 import { fetchSpotCharacteristics } from '../services/spotCharacteristics';
-import { fetchCurrentWaterTempNear } from '../services/waterTemp';
+import { fetchWaterTempNearAt } from '../services/waterTemp';
 import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import type { Catch, CatchFormData, GeoPoint, CatchWeather } from '../types';
@@ -115,6 +115,9 @@ export function MapPage() {
         lure: data.lure || null,
         notes: data.notes || null,
       });
+      // Re-enrich on edit so old catches with stale "now" weather get
+      // refreshed against the historical endpoints.
+      enrichCatch(selectedLake.id, editingCatchId, data.location, data.timestamp);
     } else {
       const newId = await addCatch(data);
       if (selectedLake && newId) {
@@ -270,7 +273,9 @@ async function enrichCatch(
   try {
     const catchRef = doc(db, 'lakes', lakeId, 'catches', catchId);
 
-    // Fetch weather, spot characteristics, and water temp in parallel
+    // Fetch weather, spot characteristics, and water temp in parallel.
+    // All three honor the catch's timestamp so a backdated log gets the
+    // historical conditions, not "now."
     const [weather, characteristics, waterTemp] = await Promise.all([
       fetchWeatherForCatch(location.latitude, location.longitude, timestamp).catch((e) => {
         console.warn('[enrichCatch] weather fetch failed:', e);
@@ -280,7 +285,7 @@ async function enrichCatch(
         console.warn('[enrichCatch] spot characteristics fetch failed:', e);
         return null;
       }),
-      fetchCurrentWaterTempNear(location.latitude, location.longitude).catch((e) => {
+      fetchWaterTempNearAt(location.latitude, location.longitude, timestamp).catch((e) => {
         console.warn('[enrichCatch] water temp fetch failed:', e);
         return null;
       }),

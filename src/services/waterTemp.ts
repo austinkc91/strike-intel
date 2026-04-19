@@ -1,7 +1,27 @@
-// USGS Water Services API for real-time water temperature
-// Parameter code 00010 = Water temperature in Celsius
+// USGS Water Services API for water temperature.
+// Parameter code 00010 = Water temperature in Celsius.
+//
+// Two endpoints in play:
+//   /nwis/iv/  — instantaneous values (15-minute cadence). Retains roughly
+//                the last ~120 days of data. Best for recent catches.
+//   /nwis/dv/  — daily values. Goes back years. Used as a fallback when
+//                the catch timestamp is older than what `iv` carries.
 
-const USGS_BASE = 'https://waterservices.usgs.gov/nwis/iv/';
+const USGS_IV = 'https://waterservices.usgs.gov/nwis/iv/';
+const USGS_DV = 'https://waterservices.usgs.gov/nwis/dv/';
+
+function localDateStr(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function isoLocal(d: Date): string {
+  // USGS startDT/endDT accept ISO-8601 with offset. We pass the moment
+  // as UTC (Z) so it's unambiguous.
+  return new Date(d.getTime()).toISOString().slice(0, 19) + 'Z';
+}
 
 interface USGSValue {
   value: string;
@@ -19,7 +39,7 @@ export async function fetchWaterTemp(
       siteStatus: 'active',
     });
 
-    const res = await fetch(`${USGS_BASE}?${params}`);
+    const res = await fetch(`${USGS_IV}?${params}`);
     if (!res.ok) return null;
 
     const data = await res.json();
@@ -73,6 +93,112 @@ export async function fetchCurrentWaterTempNear(
   return { ...result, stationName: station.siteName };
 }
 
+/**
+ * Pull water temp at a specific past timestamp. Tries instantaneous values
+ * (15-minute readings) first; if the timestamp is too old to be in the
+ * `iv` window, falls back to the daily mean from the `dv` endpoint.
+ *
+ * Returns the reading closest in time to `timestamp`, or null if neither
+ * endpoint has anything for the date. Temperature is in °F.
+ */
+export async function fetchHistoricalWaterTemp(
+  stationId: string,
+  timestamp: Date,
+): Promise<{ temp_f: number; timestamp: Date } | null> {
+  // 1) Try iv with a ±12hr window — gives us hourly granularity when in range
+  try {
+    const start = new Date(timestamp.getTime() - 12 * 60 * 60 * 1000);
+    const end = new Date(timestamp.getTime() + 12 * 60 * 60 * 1000);
+    const params = new URLSearchParams({
+      format: 'json',
+      sites: stationId,
+      parameterCd: '00010',
+      startDT: isoLocal(start),
+      endDT: isoLocal(end),
+    });
+    const res = await fetch(`${USGS_IV}?${params}`);
+    if (res.ok) {
+      const data = await res.json();
+      const values: USGSValue[] | undefined = data?.value?.timeSeries?.[0]?.values?.[0]?.value;
+      if (values && values.length > 0) {
+        const targetMs = timestamp.getTime();
+        let best: USGSValue | null = null;
+        let bestDiff = Infinity;
+        for (const v of values) {
+          const diff = Math.abs(new Date(v.dateTime).getTime() - targetMs);
+          if (diff < bestDiff) { bestDiff = diff; best = v; }
+        }
+        if (best) {
+          const tempC = parseFloat(best.value);
+          if (!isNaN(tempC) && tempC > -50) {
+            return {
+              temp_f: Math.round((tempC * 9) / 5 + 32),
+              timestamp: new Date(best.dateTime),
+            };
+          }
+        }
+      }
+    }
+  } catch {
+    /* fall through to dv */
+  }
+
+  // 2) Fall back to daily mean (statCd 00003) — covers years of history
+  try {
+    const dateStr = localDateStr(timestamp);
+    const params = new URLSearchParams({
+      format: 'json',
+      sites: stationId,
+      parameterCd: '00010',
+      statCd: '00003',
+      startDT: dateStr,
+      endDT: dateStr,
+    });
+    const res = await fetch(`${USGS_DV}?${params}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const values: USGSValue[] | undefined = data?.value?.timeSeries?.[0]?.values?.[0]?.value;
+    if (!values || values.length === 0) return null;
+    const tempC = parseFloat(values[0].value);
+    if (isNaN(tempC) || tempC < -50) return null;
+    return {
+      temp_f: Math.round((tempC * 9) / 5 + 32),
+      timestamp: new Date(values[0].dateTime),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Historical-aware companion to `fetchCurrentWaterTempNear`. If the
+ * timestamp is recent (within a few hours of now), uses the live endpoint.
+ * Otherwise queries the historical endpoints around the given moment.
+ */
+export async function fetchWaterTempNearAt(
+  lat: number,
+  lng: number,
+  timestamp: Date,
+): Promise<{ temp_f: number; timestamp: Date; stationName: string } | null> {
+  const key = `${lat.toFixed(2)}_${lng.toFixed(2)}`;
+  let station = nearestStationCache.get(key);
+  if (station === undefined) {
+    const stations = await findNearbyWaterTempStations(lat, lng, 30);
+    station = stations.length > 0
+      ? { siteId: stations[0].siteId, siteName: stations[0].siteName }
+      : null;
+    nearestStationCache.set(key, station);
+  }
+  if (!station) return null;
+
+  const ageHours = (Date.now() - timestamp.getTime()) / (1000 * 60 * 60);
+  const result = ageHours <= 6
+    ? await fetchWaterTemp(station.siteId)
+    : await fetchHistoricalWaterTemp(station.siteId, timestamp);
+  if (!result) return null;
+  return { ...result, stationName: station.siteName };
+}
+
 // Search for USGS stations near a lat/lng
 export async function findNearbyWaterTempStations(
   lat: number,
@@ -87,7 +213,7 @@ export async function findNearbyWaterTempStations(
       bBox: `${lng - radiusMiles * 0.015},${lat - radiusMiles * 0.015},${lng + radiusMiles * 0.015},${lat + radiusMiles * 0.015}`,
     });
 
-    const res = await fetch(`${USGS_BASE}?${params}`);
+    const res = await fetch(`${USGS_IV}?${params}`);
     if (!res.ok) return [];
 
     const data = await res.json();
