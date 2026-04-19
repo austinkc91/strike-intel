@@ -26,6 +26,7 @@ import type { Catch, GeoPoint } from '../../types';
 
 interface TripPlanPanelProps {
   lakeCenter: GeoPoint;
+  lakeUsgsStationId?: string | null;
   catches: Catch[];
   grid: GridCell[];
   onResultsChange: (results: MatchResult[]) => void;
@@ -35,6 +36,7 @@ interface TripPlanPanelProps {
 
 export function TripPlanPanel({
   lakeCenter,
+  lakeUsgsStationId,
   catches,
   grid,
   onResultsChange,
@@ -77,7 +79,7 @@ export function TripPlanPanel({
 
   useEffect(() => {
     let cancelled = false;
-    fetchCurrentWaterTempNear(lakeCenter.latitude, lakeCenter.longitude)
+    fetchCurrentWaterTempNear(lakeCenter.latitude, lakeCenter.longitude, lakeUsgsStationId)
       .then((wt) => {
         if (cancelled || !wt) return;
         setWaterTempF(wt.temp_f);

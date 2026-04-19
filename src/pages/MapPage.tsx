@@ -132,11 +132,11 @@ export function MapPage() {
       });
       // Re-enrich on edit so old catches with stale "now" weather get
       // refreshed against the historical endpoints.
-      enrichCatch(selectedLake.id, editingCatchId, data.location, data.timestamp);
+      enrichCatch(selectedLake.id, editingCatchId, data.location, data.timestamp, selectedLake.usgsStationId);
     } else {
       const newId = await addCatch(data);
       if (selectedLake && newId) {
-        enrichCatch(selectedLake.id, newId, data.location, data.timestamp);
+        enrichCatch(selectedLake.id, newId, data.location, data.timestamp, selectedLake.usgsStationId);
       }
     }
     setPendingPin(null);
@@ -238,6 +238,7 @@ export function MapPage() {
       {showTripPlan && selectedLake && (
         <TripPlanPanel
           lakeCenter={selectedLake.center}
+          lakeUsgsStationId={selectedLake.usgsStationId}
           catches={catches}
           grid={lakeGrid}
           onResultsChange={setPatternResults}
@@ -284,6 +285,7 @@ async function enrichCatch(
   catchId: string,
   location: GeoPoint,
   timestamp: Date,
+  lakeUsgsStationId: string | null,
 ) {
   try {
     const catchRef = doc(db, 'lakes', lakeId, 'catches', catchId);
@@ -307,7 +309,7 @@ async function enrichCatch(
         console.warn('[enrichCatch] spot characteristics fetch failed:', e);
         return null;
       }),
-      fetchWaterTempNearAt(location.latitude, location.longitude, timestamp).catch((e) => {
+      fetchWaterTempNearAt(location.latitude, location.longitude, timestamp, lakeUsgsStationId).catch((e) => {
         console.warn('[enrichCatch] water temp fetch failed:', e);
         return null;
       }),

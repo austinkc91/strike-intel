@@ -186,7 +186,7 @@ export function HomePage() {
 
     (async () => {
       try {
-        const wt = await fetchCurrentWaterTempNear(LAKE.center.latitude, LAKE.center.longitude);
+        const wt = await fetchCurrentWaterTempNear(LAKE.center.latitude, LAKE.center.longitude, LAKE.usgsStationId);
         if (cancelled || !wt) return;
         setWaterTempF(wt.temp_f);
       } catch {

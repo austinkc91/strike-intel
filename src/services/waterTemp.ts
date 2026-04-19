@@ -30,7 +30,7 @@ interface USGSValue {
 
 export async function fetchWaterTemp(
   stationId: string,
-): Promise<{ temp_f: number; timestamp: Date } | null> {
+): Promise<{ temp_f: number; timestamp: Date; siteName?: string } | null> {
   try {
     const params = new URLSearchParams({
       format: 'json',
@@ -55,7 +55,8 @@ export async function fetchWaterTemp(
     if (isNaN(tempC) || tempC < -50) return null;
 
     const temp_f = Math.round((tempC * 9) / 5 + 32);
-    return { temp_f, timestamp: new Date(latest.dateTime) };
+    const siteName: string | undefined = timeSeries[0]?.sourceInfo?.siteName;
+    return { temp_f, timestamp: new Date(latest.dateTime), siteName };
   } catch {
     return null;
   }
@@ -73,11 +74,34 @@ const nearestStationCache = new Map<string, CachedStation | null>();
 /**
  * Convenience: find the nearest USGS water-temp station for a lat/lng
  * (cached after first call) and return the current water temperature.
+ *
+ * If `pinnedStationId` is provided (e.g. from `Lake.usgsStationId`), skip
+ * discovery entirely and read straight from that station.
  */
 export async function fetchCurrentWaterTempNear(
   lat: number,
   lng: number,
+  pinnedStationId?: string | null,
 ): Promise<{ temp_f: number; timestamp: Date; stationName: string } | null> {
+  const station = await resolveStation(lat, lng, pinnedStationId);
+  if (!station) return null;
+  const result = await fetchWaterTemp(station.siteId);
+  if (!result) return null;
+  return {
+    temp_f: result.temp_f,
+    timestamp: result.timestamp,
+    stationName: result.siteName ?? station.siteName,
+  };
+}
+
+async function resolveStation(
+  lat: number,
+  lng: number,
+  pinnedStationId?: string | null,
+): Promise<CachedStation | null> {
+  if (pinnedStationId) {
+    return { siteId: pinnedStationId, siteName: pinnedStationId };
+  }
   const key = `${lat.toFixed(2)}_${lng.toFixed(2)}`;
   let station = nearestStationCache.get(key);
   if (station === undefined) {
@@ -87,10 +111,7 @@ export async function fetchCurrentWaterTempNear(
       : null;
     nearestStationCache.set(key, station);
   }
-  if (!station) return null;
-  const result = await fetchWaterTemp(station.siteId);
-  if (!result) return null;
-  return { ...result, stationName: station.siteName };
+  return station;
 }
 
 /**
@@ -104,7 +125,7 @@ export async function fetchCurrentWaterTempNear(
 export async function fetchHistoricalWaterTemp(
   stationId: string,
   timestamp: Date,
-): Promise<{ temp_f: number; timestamp: Date } | null> {
+): Promise<{ temp_f: number; timestamp: Date; siteName?: string } | null> {
   // 1) Try iv with a ±12hr window — gives us hourly granularity when in range
   try {
     const start = new Date(timestamp.getTime() - 12 * 60 * 60 * 1000);
@@ -119,7 +140,9 @@ export async function fetchHistoricalWaterTemp(
     const res = await fetch(`${USGS_IV}?${params}`);
     if (res.ok) {
       const data = await res.json();
-      const values: USGSValue[] | undefined = data?.value?.timeSeries?.[0]?.values?.[0]?.value;
+      const ts0 = data?.value?.timeSeries?.[0];
+      const values: USGSValue[] | undefined = ts0?.values?.[0]?.value;
+      const siteName: string | undefined = ts0?.sourceInfo?.siteName;
       if (values && values.length > 0) {
         const targetMs = timestamp.getTime();
         let best: USGSValue | null = null;
@@ -134,6 +157,7 @@ export async function fetchHistoricalWaterTemp(
             return {
               temp_f: Math.round((tempC * 9) / 5 + 32),
               timestamp: new Date(best.dateTime),
+              siteName,
             };
           }
         }
@@ -157,13 +181,16 @@ export async function fetchHistoricalWaterTemp(
     const res = await fetch(`${USGS_DV}?${params}`);
     if (!res.ok) return null;
     const data = await res.json();
-    const values: USGSValue[] | undefined = data?.value?.timeSeries?.[0]?.values?.[0]?.value;
+    const ts0 = data?.value?.timeSeries?.[0];
+    const values: USGSValue[] | undefined = ts0?.values?.[0]?.value;
+    const siteName: string | undefined = ts0?.sourceInfo?.siteName;
     if (!values || values.length === 0) return null;
     const tempC = parseFloat(values[0].value);
     if (isNaN(tempC) || tempC < -50) return null;
     return {
       temp_f: Math.round((tempC * 9) / 5 + 32),
       timestamp: new Date(values[0].dateTime),
+      siteName,
     };
   } catch {
     return null;
@@ -179,16 +206,9 @@ export async function fetchWaterTempNearAt(
   lat: number,
   lng: number,
   timestamp: Date,
+  pinnedStationId?: string | null,
 ): Promise<{ temp_f: number; timestamp: Date; stationName: string } | null> {
-  const key = `${lat.toFixed(2)}_${lng.toFixed(2)}`;
-  let station = nearestStationCache.get(key);
-  if (station === undefined) {
-    const stations = await findNearbyWaterTempStations(lat, lng, 30);
-    station = stations.length > 0
-      ? { siteId: stations[0].siteId, siteName: stations[0].siteName }
-      : null;
-    nearestStationCache.set(key, station);
-  }
+  const station = await resolveStation(lat, lng, pinnedStationId);
   if (!station) return null;
 
   const ageHours = (Date.now() - timestamp.getTime()) / (1000 * 60 * 60);
@@ -199,18 +219,32 @@ export async function fetchWaterTempNearAt(
   return { ...result, stationName: station.siteName };
 }
 
-// Search for USGS stations near a lat/lng
+// Search for USGS stations near a lat/lng. NWIS rejects bBox values with
+// more than 7 decimal places (we were sending 12+ raw float digits and
+// getting 400s back). Round defensively.
+function round4(n: number): number {
+  return Math.round(n * 10000) / 10000;
+}
+
 export async function findNearbyWaterTempStations(
   lat: number,
   lng: number,
   radiusMiles: number = 25,
 ): Promise<Array<{ siteId: string; siteName: string; distance: number }>> {
   try {
+    const dLat = round4(radiusMiles * 0.015);
+    const dLng = round4(radiusMiles * 0.015);
+    const bbox = [
+      round4(lng - dLng),
+      round4(lat - dLat),
+      round4(lng + dLng),
+      round4(lat + dLat),
+    ].join(',');
     const params = new URLSearchParams({
       format: 'json',
       parameterCd: '00010',
       siteStatus: 'active',
-      bBox: `${lng - radiusMiles * 0.015},${lat - radiusMiles * 0.015},${lng + radiusMiles * 0.015},${lat + radiusMiles * 0.015}`,
+      bBox: bbox,
     });
 
     const res = await fetch(`${USGS_IV}?${params}`);

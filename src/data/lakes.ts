@@ -19,5 +19,9 @@ export const LAKE_TEXOMA: Lake = {
   bathymetryTileUrl: null,
   shorelineGeoJSON: null,
   species: [],
+  // USGS does NOT have an active station on Lake Texoma reporting water
+  // temperature (parameter 00010). The closest live reading is on a
+  // tributary creek 25mi away, which is misleading enough that we'd rather
+  // show no value than the wrong value.
   usgsStationId: null,
 };
