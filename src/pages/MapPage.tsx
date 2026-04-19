@@ -19,7 +19,7 @@ import { db } from '../services/firebase';
 import type { Catch, CatchFormData, GeoPoint, CatchWeather } from '../types';
 
 export function MapPage() {
-  const { selectedLake, setPendingPin, activeCatch, setActiveCatch, pendingPatternCatchId, setPendingPatternCatchId } = useAppStore();
+  const { selectedLake, setPendingPin, activeCatch, setActiveCatch, pendingPatternCatchId, setPendingPatternCatchId, pendingEditCatchId, setPendingEditCatchId } = useAppStore();
   const { catches, addCatch, removeCatch } = useCatches(selectedLake?.id || null);
   const { getCurrentPosition, position, loading: geoLoading } = useGeolocation();
   const [showForm, setShowForm] = useState(false);
@@ -103,6 +103,21 @@ export function MapPage() {
       setPendingPatternCatchId(null);
     }
   }, [pendingPatternCatchId, catches]);
+
+  // Auto-open the edit form when navigated here from "Edit Catch" on the
+  // Catches page. Mirrors the pattern flow above.
+  useEffect(() => {
+    if (!pendingEditCatchId) return;
+    const target = catches.find(c => c.id === pendingEditCatchId);
+    if (target) {
+      setActiveCatch(null);
+      setFormLocation(target.location);
+      setFormTimestamp(target.timestamp?.toDate?.() || new Date());
+      setEditingCatchId(target.id);
+      setShowForm(true);
+      setPendingEditCatchId(null);
+    }
+  }, [pendingEditCatchId, catches]);
 
   const handleSubmit = async (data: CatchFormData) => {
     if (editingCatchId && selectedLake) {

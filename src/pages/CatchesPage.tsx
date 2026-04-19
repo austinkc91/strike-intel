@@ -11,7 +11,7 @@ type SortMode = 'recent' | 'best-today';
 
 export function CatchesPage() {
   const navigate = useNavigate();
-  const { selectedLake, setPendingPatternCatchId } = useAppStore();
+  const { selectedLake, setPendingPatternCatchId, setPendingEditCatchId } = useAppStore();
   const { catches, loading, removeCatch } = useCatches(selectedLake?.id || null);
   const [sortMode, setSortMode] = useState<SortMode>('recent');
   const [currentWeather, setCurrentWeather] = useState<CatchWeather | null>(null);
@@ -29,6 +29,15 @@ export function CatchesPage() {
     setMapCenter([c.location.longitude, c.location.latitude]);
     setMapZoom(15);
     setActiveCatch(c);
+    setActionSheetCatch(null);
+    navigate('/map');
+  };
+
+  const handleEdit = (c: Catch) => {
+    const { setMapCenter, setMapZoom } = useAppStore.getState();
+    setMapCenter([c.location.longitude, c.location.latitude]);
+    setMapZoom(15);
+    setPendingEditCatchId(c.id);
     setActionSheetCatch(null);
     navigate('/map');
   };
@@ -175,6 +184,7 @@ export function CatchesPage() {
           onClose={() => setActionSheetCatch(null)}
           onFindSimilar={handleFindSimilar}
           onViewOnMap={handleViewOnMap}
+          onEdit={handleEdit}
           onDelete={handleDelete}
         />
       )}
@@ -191,12 +201,14 @@ function CatchActionSheet({
   onClose,
   onFindSimilar,
   onViewOnMap,
+  onEdit,
   onDelete,
 }: {
   catch_: Catch;
   onClose: () => void;
   onFindSimilar: (c: Catch) => void;
   onViewOnMap: (c: Catch) => void;
+  onEdit: (c: Catch) => void;
   onDelete: (c: Catch) => void;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -262,6 +274,9 @@ function CatchActionSheet({
           <button className="btn btn-secondary btn-block" onClick={() => onViewOnMap(c)}>
             <Icon name="map" /> View on Map
           </button>
+          <button className="btn btn-secondary btn-block" onClick={() => onEdit(c)}>
+            <Icon name="edit" /> Edit Catch
+          </button>
           {!confirmDelete ? (
             <button
               className="btn btn-secondary btn-block"
@@ -287,7 +302,7 @@ function CatchActionSheet({
   );
 }
 
-function Icon({ name }: { name: 'target' | 'map' | 'trash' }) {
+function Icon({ name }: { name: 'target' | 'map' | 'edit' | 'trash' }) {
   if (name === 'target') {
     return (
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -299,6 +314,14 @@ function Icon({ name }: { name: 'target' | 'map' | 'trash' }) {
     return (
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6" /><line x1="8" y1="2" x2="8" y2="18" /><line x1="16" y1="6" x2="16" y2="22" />
+      </svg>
+    );
+  }
+  if (name === 'edit') {
+    return (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
       </svg>
     );
   }

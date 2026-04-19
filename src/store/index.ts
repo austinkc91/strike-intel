@@ -18,6 +18,11 @@ interface AppState {
   pendingPatternCatchId: string | null;
   setPendingPatternCatchId: (id: string | null) => void;
 
+  // Catch ID to auto-open the edit form for when MapPage mounts. Used by
+  // "Edit Catch" on the Catches list.
+  pendingEditCatchId: string | null;
+  setPendingEditCatchId: (id: string | null) => void;
+
   isLogging: boolean;
   setIsLogging: (v: boolean) => void;
 
@@ -47,6 +52,9 @@ export const useAppStore = create<AppState>((set) => ({
 
   pendingPatternCatchId: null,
   setPendingPatternCatchId: (id) => set({ pendingPatternCatchId: id }),
+
+  pendingEditCatchId: null,
+  setPendingEditCatchId: (id) => set({ pendingEditCatchId: id }),
 
   isLogging: false,
   setIsLogging: (v) => set({ isLogging: v }),
