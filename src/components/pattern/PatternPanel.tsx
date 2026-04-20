@@ -36,7 +36,7 @@ export function PatternPanel({
 }: PatternPanelProps) {
   const speciesWeights = useMemo(() => getSpeciesWeights(catchData.species), [catchData.species]);
   const [weights, setWeights] = useState<PatternWeights>(speciesWeights);
-  const [threshold, setThreshold] = useState(0.85);
+  const [threshold, setThreshold] = useState(0.9);
   const [expanded, setExpanded] = useState(false);
   const [showSliders, setShowSliders] = useState(false);
 

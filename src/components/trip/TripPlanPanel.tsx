@@ -67,7 +67,7 @@ export function TripPlanPanel({
   // null = auto-pick best match. Otherwise locked to a specific catch.
   const [selectedPatternCatchId, setSelectedPatternCatchId] = useState<string | null>(null);
   const [showAllMatches, setShowAllMatches] = useState(false);
-  const [matchThreshold, setMatchThreshold] = useState(0.8);
+  const [matchThreshold, setMatchThreshold] = useState(0.9);
   // false = full sheet expanded; true = small bottom bar so the user can
   // see the map underneath while spot picks stay highlighted.
   const [collapsed, setCollapsed] = useState(false);
