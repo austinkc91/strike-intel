@@ -2,7 +2,7 @@ import { useAppStore } from '../store';
 import { auth } from '../services/firebase';
 
 export function SettingsPage() {
-  const { selectedLake } = useAppStore();
+  const { selectedLake, setIsAuthenticated } = useAppStore();
   const user = auth.currentUser;
 
   return (
@@ -64,6 +64,13 @@ export function SettingsPage() {
         <button className="btn btn-secondary btn-block" style={{ marginTop: 12 }} disabled>
           Sign in with Google
           <span className="badge badge-muted" style={{ marginLeft: 8 }}>Soon</span>
+        </button>
+        <button
+          className="btn btn-secondary btn-block"
+          style={{ marginTop: 8, color: 'var(--color-danger)', borderColor: 'rgba(248,113,113,0.25)' }}
+          onClick={() => setIsAuthenticated(false)}
+        >
+          Sign Out
         </button>
       </div>
 

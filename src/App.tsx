@@ -5,6 +5,8 @@ import { HomePage } from './pages/HomePage';
 import { MapPage } from './pages/MapPage';
 import { CatchesPage } from './pages/CatchesPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { LoginPage } from './pages/LoginPage';
+import { useAppStore } from './store';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -16,6 +18,16 @@ const queryClient = new QueryClient({
 });
 
 export default function App() {
+  const isAuthenticated = useAppStore((s) => s.isAuthenticated);
+
+  if (!isAuthenticated) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <LoginPage />
+      </QueryClientProvider>
+    );
+  }
+
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>

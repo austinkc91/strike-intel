@@ -36,6 +36,31 @@ interface AppState {
   // switching on one screen carries over to the other.
   selectedSpecies: Species;
   setSelectedSpecies: (s: Species) => void;
+
+  // Single-user gate. Hardcoded creds in the bundle — keeps casual passersby
+  // out, not a real security boundary. Persisted in localStorage so the
+  // user only has to sign in once per device.
+  isAuthenticated: boolean;
+  setIsAuthenticated: (v: boolean) => void;
+}
+
+const AUTH_STORAGE_KEY = 'si_auth_v1';
+
+function readAuth(): boolean {
+  try {
+    return localStorage.getItem(AUTH_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeAuth(v: boolean): void {
+  try {
+    if (v) localStorage.setItem(AUTH_STORAGE_KEY, '1');
+    else localStorage.removeItem(AUTH_STORAGE_KEY);
+  } catch {
+    /* sandboxed storage — non-fatal */
+  }
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -67,4 +92,7 @@ export const useAppStore = create<AppState>((set) => ({
 
   selectedSpecies: 'striper',
   setSelectedSpecies: (s) => set({ selectedSpecies: s }),
+
+  isAuthenticated: readAuth(),
+  setIsAuthenticated: (v) => { writeAuth(v); set({ isAuthenticated: v }); },
 }));
