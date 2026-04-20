@@ -179,9 +179,12 @@ export function MapPage() {
   };
 
   const handlePatternClose = () => {
+    // Keep the pattern markers on the map after the panel closes — the user
+    // wants to actually see and explore the highlighted spots. They can clear
+    // them via the "Clear spots" pill, or replace them by reopening either
+    // the pattern panel or the trip planner.
     setShowPattern(false);
     setPatternCatch(null);
-    setPatternResults([]);
   };
 
   const handleSpotClick = (result: MatchResult) => {
@@ -200,7 +203,7 @@ export function MapPage() {
         onCatchClick={handleCatchClick}
         caughtNowLoading={geoLoading}
         currentWeather={currentWeather}
-        patternResults={(showPattern || showTripPlan) ? patternResults.slice(0, 200) : []}
+        patternResults={patternResults.slice(0, 200)}
       />
 
       {showForm && (
@@ -243,8 +246,46 @@ export function MapPage() {
           grid={lakeGrid}
           onResultsChange={setPatternResults}
           onSpotClick={handleSpotClick}
-          onClose={() => { setShowTripPlan(false); setPatternResults([]); }}
+          onClose={() => setShowTripPlan(false)}
         />
+      )}
+
+      {/* Persistent "Clear spots" pill — visible whenever spot recommendations
+          are on the map and no panel is currently open. */}
+      {patternResults.length > 0 && !showForm && !activeCatch && !showPattern && !showTripPlan && (
+        <button
+          className="floating-panel"
+          onClick={() => setPatternResults([])}
+          style={{
+            position: 'absolute',
+            bottom: 20,
+            right: 90,
+            padding: '8px 12px',
+            color: 'var(--color-text)',
+            fontSize: 12,
+            fontWeight: 600,
+            letterSpacing: '-0.005em',
+            zIndex: 50,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+          }}
+        >
+          <span style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 14, height: 14,
+            borderRadius: 999,
+            background: 'var(--color-accent)',
+            color: '#041322',
+            fontSize: 10,
+            fontWeight: 800,
+          }}>
+            {Math.min(patternResults.length, 99)}
+          </span>
+          Clear spots
+        </button>
       )}
 
       {/* Plan Trip button */}
