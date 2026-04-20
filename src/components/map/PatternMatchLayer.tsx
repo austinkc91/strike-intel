@@ -21,6 +21,7 @@ export function PatternMatchLayer({ results }: PatternMatchLayerProps) {
         topScore: z.topScore,
         count: z.count,
         radius: z.radius_deg,
+        isOrigin: z.containsOrigin ? 1 : 0,
       },
     })),
   }), [zones]);
@@ -65,7 +66,9 @@ export function PatternMatchLayer({ results }: PatternMatchLayerProps) {
             'circle-blur': 0.6,
           }}
         />
-        {/* Solid center marker */}
+        {/* Solid center marker. Origin zone (where the user's reference
+            catch lives) gets an orange ring instead of white so it's
+            visually distinct from the suggestion zones. */}
         <Layer
           id="pattern-zone-dot"
           type="circle"
@@ -77,17 +80,33 @@ export function PatternMatchLayer({ results }: PatternMatchLayerProps) {
               16, ['interpolate', ['linear'], ['get', 'count'], 1, 10, 5, 16, 15, 22],
             ],
             'circle-color': [
-              'interpolate', ['linear'], ['get', 'topScore'],
-              0.7, '#ff9800',
-              0.8, '#8bc34a',
-              0.85, '#66bb6a',
-              0.9, '#4caf50',
-              0.95, '#2e7d32',
+              'case',
+              ['==', ['get', 'isOrigin'], 1], '#ff8a3d',
+              [
+                'interpolate', ['linear'], ['get', 'topScore'],
+                0.7, '#ff9800',
+                0.8, '#8bc34a',
+                0.85, '#66bb6a',
+                0.9, '#4caf50',
+                0.95, '#2e7d32',
+              ],
             ],
             'circle-opacity': 0.9,
-            'circle-stroke-width': 2,
-            'circle-stroke-color': '#ffffff',
-            'circle-stroke-opacity': 0.8,
+            'circle-stroke-width': [
+              'case',
+              ['==', ['get', 'isOrigin'], 1], 3,
+              2,
+            ],
+            'circle-stroke-color': [
+              'case',
+              ['==', ['get', 'isOrigin'], 1], '#ffae6b',
+              '#ffffff',
+            ],
+            'circle-stroke-opacity': [
+              'case',
+              ['==', ['get', 'isOrigin'], 1], 1,
+              0.8,
+            ],
           }}
         />
       </Source>

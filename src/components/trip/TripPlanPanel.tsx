@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { computeWeeklyForecast, type ForecastDay } from '../../services/forecast';
 import { computeHourlyScores, findBestWindows, type HourScore } from '../../services/hourlyScores';
 import { fetchCurrentWaterTempNear } from '../../services/waterTemp';
-import { getDayInfo } from '../../services/astronomy';
+import { getDayInfo, hoursOfDay } from '../../services/astronomy';
 import { getSolunarWindows } from '../../services/solunar';
 import { SPECIES_LABELS } from '../../services/fishScoring';
 import { matchConditions, type ConditionsMatch } from '../../services/conditionsMatcher';
@@ -12,13 +12,18 @@ import {
 } from '../../services/weather';
 import { moonPhaseEmoji } from '../../services/moonPhase';
 import {
+  buildCellSignature,
   buildSignature,
+  computeDepthChangeLookup,
   computeNormRanges,
   defaultSignatureFor,
+  findNearestCell,
   findSimilarSpots,
   getSpeciesWeights,
   type GridCell,
   type MatchResult,
+  type PatternWeights,
+  type SpotSignature,
 } from '../../services/patternEngine';
 import { useAppStore } from '../../store';
 import { SpeciesPills } from '../common/SpeciesPills';
@@ -185,34 +190,118 @@ export function TripPlanPanel({
       onResultsChange([]);
       return;
     }
-    const refSig = patternCatch
-      ? signatureFromCatch(patternCatch, selectedDay, dayInfo.moonIllumination, ranges)
-      : defaultSignatureFor(
-          species,
-          {
-            airTempF: focusedHourData.rep.temp_f,
-            waterTempF: focusedHourData.rep.water_temp_f,
-            windSpeedMph: focusedHourData.rep.wind_speed_mph,
-            cloudCoverPct: focusedHourData.rep.cloud_cover_pct,
-          },
-          selectedDay,
-          dayInfo.moonIllumination,
-          ranges,
+
+    const sunriseHour = hoursOfDay(dayInfo.sunrise);
+    const sunsetHour = hoursOfDay(dayInfo.sunset);
+    // Build the depth-change lookup once — both the reference cell signature
+    // (Fix #3) and findSimilarSpots' inner loop need it. findSimilarSpots
+    // also rebuilds it internally, but that's a cheap O(n) walk.
+    const depthChangeLookup = computeDepthChangeLookup(grid);
+
+    let refSig: SpotSignature;
+    let originCellId: number | null = null;
+    let referenceTimestamp: Date = focusedHourData.date;
+
+    if (patternCatch) {
+      // Fix #3 — anchor the reference to the catch's nearest grid cell so
+      // the signature goes through the same transforms as candidates.
+      // Without this, a catch's own spot never scores 100% against itself.
+      // Fix #4 — when the user hasn't manually locked a single catch and
+      // 3+ catches matched conditions well, build an ensemble (weighted
+      // mean of nearest-cell signatures) so one freak catch can't drive
+      // every recommendation.
+      const ensembleEligible =
+        !selectedPatternCatchId &&
+        matchedCatches.length >= 3 &&
+        matchedCatches.filter((m) => m.match.score >= 0.7).length >= 3;
+
+      const nearest = findNearestCell(grid, patternCatch.location.latitude, patternCatch.location.longitude);
+      originCellId = nearest?.id ?? null;
+      const catchTs = patternCatch.timestamp?.toDate?.() ?? selectedDay;
+      referenceTimestamp = catchTs;
+
+      if (ensembleEligible) {
+        const top = matchedCatches
+          .filter((m) => m.match.score >= 0.7)
+          .slice(0, 5);
+        const sigs: { sig: SpotSignature; weight: number }[] = [];
+        for (const { catch_: c, match } of top) {
+          const cell = findNearestCell(grid, c.location.latitude, c.location.longitude);
+          if (!cell) continue;
+          const ts = c.timestamp?.toDate?.() ?? selectedDay;
+          const wind = c.weather?.wind_direction_deg ?? focusedHourData.rep.wind_direction_deg;
+          const sig = buildCellSignature(
+            cell, wind, ts, dayInfo.moonIllumination, ranges, depthChangeLookup,
+            sunriseHour, sunsetHour,
+          );
+          sigs.push({ sig, weight: Math.max(0.1, match.score) });
+        }
+        if (sigs.length >= 3) {
+          refSig = averageSignatures(sigs);
+          // Ensemble: don't flag any single origin (recommendations are a
+          // blend) — the picker UI still highlights the top catch.
+          originCellId = null;
+        } else if (nearest) {
+          refSig = buildCellSignature(
+            nearest, focusedHourData.rep.wind_direction_deg, catchTs,
+            dayInfo.moonIllumination, ranges, depthChangeLookup,
+            sunriseHour, sunsetHour,
+          );
+        } else {
+          refSig = signatureFromCatch(patternCatch, catchTs, dayInfo.moonIllumination, ranges, sunriseHour, sunsetHour);
+        }
+      } else if (nearest) {
+        refSig = buildCellSignature(
+          nearest, focusedHourData.rep.wind_direction_deg, catchTs,
+          dayInfo.moonIllumination, ranges, depthChangeLookup,
+          sunriseHour, sunsetHour,
         );
+      } else {
+        refSig = signatureFromCatch(patternCatch, catchTs, dayInfo.moonIllumination, ranges, sunriseHour, sunsetHour);
+      }
+    } else {
+      refSig = defaultSignatureFor(
+        species,
+        {
+          airTempF: focusedHourData.rep.temp_f,
+          waterTempF: focusedHourData.rep.water_temp_f,
+          windSpeedMph: focusedHourData.rep.wind_speed_mph,
+          cloudCoverPct: focusedHourData.rep.cloud_cover_pct,
+        },
+        selectedDay,
+        dayInfo.moonIllumination,
+        ranges,
+      );
+    }
+
+    // Fix #5 — modulate weights by today's conditions vs the catch's
+    // conditions. Trust the catch's spatial wind preference less when wind
+    // direction differs strongly. Trust its time-of-day preference less
+    // when the planned hour is far from the catch hour.
+    const baseWeights = getSpeciesWeights(patternCatch?.species ?? species);
+    const modulated = patternCatch
+      ? modulateWeights(baseWeights, patternCatch, focusedHourData)
+      : baseWeights;
 
     const matches = findSimilarSpots(
       refSig,
       grid,
       focusedHourData.rep.wind_direction_deg,
-      selectedDay,
+      focusedHourData.date,
       dayInfo.moonIllumination,
       ranges,
-      getSpeciesWeights(patternCatch?.species ?? species),
+      modulated,
       matchThreshold,
+      {
+        originCellId,
+        referenceTimestamp,
+        sunriseHour,
+        sunsetHour,
+      },
     );
     setResults(matches);
     onResultsChange(matches);
-  }, [selectedDay, focusedHourData, species, patternCatch, grid, ranges, dayInfo, matchThreshold, onResultsChange]);
+  }, [selectedDay, focusedHourData, species, patternCatch, selectedPatternCatchId, matchedCatches, grid, ranges, dayInfo, matchThreshold, onResultsChange]);
 
   const briefing = focusedHourData?.briefing ?? [];
   const hazard = focusedHourData?.hasHazard ?? false;
@@ -666,11 +755,16 @@ function formatHour(h: number): string {
   return h < 12 ? `${h}am` : `${h - 12}pm`;
 }
 
+// Last-resort fallback when no grid cell is available to anchor the
+// reference. Used only when grid is empty / the catch falls outside the
+// grid — ordinarily we anchor to the nearest cell instead (Fix #3).
 function signatureFromCatch(
   c: Catch,
-  selectedDay: Date,
+  refTimestamp: Date,
   moonIllumination: number,
   ranges: ReturnType<typeof computeNormRanges>,
+  sunriseHour: number = 6,
+  sunsetHour: number = 19,
 ) {
   const chars = c.characteristics;
   return buildSignature(
@@ -681,8 +775,63 @@ function signatureFromCatch(
     chars?.pointProximity ?? 800,
     chars?.shorelineDistance ?? 500,
     chars?.windExposure ?? 0.5,
-    selectedDay,
+    refTimestamp,
     moonIllumination,
     ranges,
+    /* depthChange */ 0,
+    /* windAdvantage */ 0.5,
+    sunriseHour,
+    sunsetHour,
   );
+}
+
+// Weighted dim-by-dim average. Used to blend top-N matched-catch signatures
+// into one ensemble signature (Fix #4) so single freak catches can't drive
+// every recommendation.
+function averageSignatures(items: { sig: SpotSignature; weight: number }[]): SpotSignature {
+  const dims: (keyof SpotSignature)[] = [
+    'depth', 'depthChange', 'slope', 'dropoffProximity', 'channelProximity',
+    'pointProximity', 'shorelineDistance', 'windExposure', 'windAdvantage',
+    'timeOfDay', 'season', 'moonPhase',
+  ];
+  const totalW = items.reduce((s, x) => s + x.weight, 0) || 1;
+  const out = {} as SpotSignature;
+  for (const dim of dims) {
+    let weighted = 0;
+    for (const { sig, weight } of items) weighted += sig[dim] * weight;
+    out[dim] = weighted / totalW;
+  }
+  return out;
+}
+
+// Wrap-aware degree distance, 0–180. Inlined from the conditionsMatcher
+// helper of the same name — too small to share via export.
+function circularDist(a: number, b: number, period: number): number {
+  const d = Math.abs(a - b) % period;
+  return Math.min(d, period - d);
+}
+
+// Fix #5 — soft-discount weights when today's conditions diverge from the
+// catch's. The reference catch's spatial wind preference (windward shore,
+// fetch direction) only transfers when wind direction is similar. Same
+// logic for hour-of-day: a 7am catch's time-of-day signal is weak when
+// planning a 3pm trip.
+function modulateWeights(
+  base: PatternWeights,
+  patternCatch: Catch,
+  focused: HourScore,
+): PatternWeights {
+  const w = { ...base };
+  const catchWind = patternCatch.weather?.wind_direction_deg;
+  if (typeof catchWind === 'number' && Number.isFinite(catchWind)) {
+    const delta = circularDist(focused.rep.wind_direction_deg, catchWind, 360);
+    if (delta > 90) w.windAdvantage = w.windAdvantage * 0.4;
+    else if (delta > 45) w.windAdvantage = w.windAdvantage * 0.7;
+  }
+  const catchTs = patternCatch.timestamp?.toDate?.();
+  if (catchTs) {
+    const hourDelta = circularDist(focused.date.getHours(), catchTs.getHours(), 24);
+    if (hourDelta > 5) w.timeOfDay = w.timeOfDay * 0.5;
+  }
+  return w;
 }

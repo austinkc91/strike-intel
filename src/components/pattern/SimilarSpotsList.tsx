@@ -37,8 +37,8 @@ export function SimilarSpotsList({ results, onSpotClick }: SimilarSpotsListProps
             gap: 10,
             width: '100%',
             padding: '8px 10px',
-            background: 'var(--color-bg)',
-            border: '1px solid var(--color-border)',
+            background: r.isOrigin ? 'rgba(255,138,61,0.10)' : 'var(--color-bg)',
+            border: `1px solid ${r.isOrigin ? 'rgba(255,138,61,0.45)' : 'var(--color-border)'}`,
             borderRadius: 'var(--radius)',
             color: 'var(--color-text)',
             marginBottom: 4,
@@ -64,9 +64,23 @@ export function SimilarSpotsList({ results, onSpotClick }: SimilarSpotsListProps
           </div>
 
           {/* Details */}
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 13, fontWeight: 500 }}>
-              {r.lat.toFixed(4)}, {r.lng.toFixed(4)}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 500, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <span>{r.lat.toFixed(4)}, {r.lng.toFixed(4)}</span>
+              {r.isOrigin && (
+                <span style={{
+                  fontSize: 9,
+                  fontWeight: 800,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                  padding: '2px 6px',
+                  borderRadius: 999,
+                  background: 'rgba(255,138,61,0.25)',
+                  color: '#ffae6b',
+                }}>
+                  Your spot
+                </span>
+              )}
             </div>
             <div style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
               Depth: {Math.round(r.signature.depth * 40)}ft &middot;

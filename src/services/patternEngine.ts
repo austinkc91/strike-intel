@@ -204,6 +204,11 @@ export interface MatchResult {
   lat: number;
   score: number;
   signature: SpotSignature;
+  /** True when this is the cell anchoring the reference signature — i.e.
+   *  the user's own catch spot. Lets the UI flag it as "Your spot" so the
+   *  user doesn't think the engine is just suggesting somewhere they've
+   *  already fished. */
+  isOrigin?: boolean;
 }
 
 export interface NormRanges {
@@ -229,8 +234,29 @@ function inverseNormalize(value: number, max: number): number {
   return 1 - normalize(value, max);
 }
 
-function timeOfDayNorm(date: Date): number {
-  return (date.getHours() + date.getMinutes() / 60) / 24;
+/**
+ * Crepuscular-aware time-of-day similarity. Maps a timestamp to a 0–1 score
+ * representing closeness to the nearest sunrise/sunset peak. 1.0 at the
+ * peak, gaussian falloff to ~0 about 5h away. So a 5:30am catch and a 7pm
+ * catch both score near 1.0 — they're equivalent fishing times even though
+ * a naive (hours / 24) treatment would say they're 56% of the day apart.
+ *
+ * Defaults to 6 / 19 if the caller doesn't have local sunrise/sunset.
+ */
+function crepuscularTimeNorm(
+  date: Date,
+  sunriseHour: number = 6,
+  sunsetHour: number = 19,
+): number {
+  const h = date.getHours() + date.getMinutes() / 60;
+  // Wrap-aware distance to either crepuscular peak.
+  const dWrap = (a: number, b: number) => {
+    const d = Math.abs(a - b) % 24;
+    return Math.min(d, 24 - d);
+  };
+  const dist = Math.min(dWrap(h, sunriseHour), dWrap(h, sunsetHour));
+  // Gaussian-ish: 1.0 at peak, drops to ~0.13 by 6h away.
+  return Math.exp(-0.5 * (dist / 3) ** 2);
 }
 
 function seasonNorm(date: Date): number {
@@ -314,6 +340,8 @@ export function buildSignature(
   ranges: NormRanges,
   depthChange_ft: number = 0,
   windAdvantage: number = 0.5,
+  sunriseHour: number = 6,
+  sunsetHour: number = 19,
 ): SpotSignature {
   return {
     depth: normalize(depth_ft, ranges.maxDepth),
@@ -325,7 +353,7 @@ export function buildSignature(
     shorelineDistance: normalize(shorelineDist_ft, ranges.maxShorelineDist),
     windExposure,
     windAdvantage,
-    timeOfDay: timeOfDayNorm(timestamp),
+    timeOfDay: crepuscularTimeNorm(timestamp, sunriseHour, sunsetHour),
     season: seasonNorm(timestamp),
     moonPhase: moonIllumination,
   };
@@ -338,18 +366,21 @@ export function buildCellSignature(
   moonIllumination: number,
   ranges: NormRanges,
   depthChangeLookup: Map<number, number>,
+  sunriseHour: number = 6,
+  sunsetHour: number = 19,
 ): SpotSignature {
   const windExp = getWindExposureForDirection(windDeg, cell.windExposure8);
   const depthChange = depthChangeLookup.get(cell.id) ?? 0;
   const windAdv = computeWindAdvantage(windDeg, cell.windExposure8, cell.shorelineDist_ft, ranges.maxShorelineDist);
 
-  // Time-of-day depth adjustment: compare cell depth against
-  // where fish would be at this time vs the catch time
-  const hour = timestamp.getHours();
-  const timeFactor = timeDepthFactor(hour);
-
+  // NOTE: We deliberately do NOT apply timeDepthFactor here. Previously this
+  // function multiplied cell.depth_ft by a time-of-day factor while
+  // buildSignature left the reference depth raw, creating an unfair
+  // mismatch (the candidates were time-shifted but the reference wasn't).
+  // findSimilarSpots now applies the shift symmetrically at compare time
+  // using the ratio between target hour and reference hour.
   return {
-    depth: normalize(cell.depth_ft * timeFactor, ranges.maxDepth),
+    depth: normalize(cell.depth_ft, ranges.maxDepth),
     depthChange: normalize(depthChange, ranges.maxDepthChange),
     slope: normalize(cell.slope_deg, ranges.maxSlope),
     dropoffProximity: inverseNormalize(cell.dropoffDist_ft, ranges.maxDropoffDist),
@@ -358,7 +389,7 @@ export function buildCellSignature(
     shorelineDistance: normalize(cell.shorelineDist_ft, ranges.maxShorelineDist),
     windExposure: windExp,
     windAdvantage: windAdv,
-    timeOfDay: timeOfDayNorm(timestamp),
+    timeOfDay: crepuscularTimeNorm(timestamp, sunriseHour, sunsetHour),
     season: seasonNorm(timestamp),
     moonPhase: moonIllumination,
   };
@@ -426,6 +457,19 @@ export function findNearestCell(grid: GridCell[], lat: number, lng: number): Gri
   return best;
 }
 
+export interface FindSimilarSpotsOptions {
+  /** Cell ID of the reference catch (when known). Results from this cell
+   *  are flagged with `isOrigin: true` so the UI can mark them. */
+  originCellId?: number | null;
+  /** When the reference signature was sampled. Used together with the
+   *  search `timestamp` to apply a symmetric depth-time shift on the
+   *  reference's depth dim — preventing the dawn-vs-noon depth mismatch
+   *  bug. Defaults to the search timestamp (no shift). */
+  referenceTimestamp?: Date;
+  sunriseHour?: number;
+  sunsetHour?: number;
+}
+
 export function findSimilarSpots(
   referenceSignature: SpotSignature,
   grid: GridCell[],
@@ -435,16 +479,39 @@ export function findSimilarSpots(
   ranges: NormRanges,
   weights: PatternWeights = DEFAULT_WEIGHTS,
   threshold: number = 0.85,
+  options: FindSimilarSpotsOptions = {},
 ): MatchResult[] {
   const depthChangeLookup = computeDepthChangeLookup(grid);
+
+  const sunriseHour = options.sunriseHour ?? 6;
+  const sunsetHour = options.sunsetHour ?? 19;
+  const refTs = options.referenceTimestamp ?? timestamp;
+
+  // Symmetric depth-time shift: scale the reference depth dim by the ratio
+  // of expected fish-depth at the search hour vs the reference hour. Fish
+  // move shallower at dawn/dusk, deeper midday — so a 7am catch (factor
+  // 0.85) compared against noon candidates (factor 1.15) needs the
+  // reference bumped up by 1.15/0.85 ≈ 1.35× to cancel the time bias.
+  const targetDepthFactor = timeDepthFactor(timestamp.getHours());
+  const refDepthFactor = timeDepthFactor(refTs.getHours());
+  const depthRatio = targetDepthFactor / refDepthFactor;
+  const adjustedRef: SpotSignature = depthRatio === 1
+    ? referenceSignature
+    : {
+        ...referenceSignature,
+        depth: Math.min(1, Math.max(0, referenceSignature.depth * depthRatio)),
+      };
 
   // Filter out very shallow cells (< 3ft) — not fishable
   const fishableCells = grid.filter(c => c.depth_ft >= 3);
 
   const results: MatchResult[] = [];
   for (const cell of fishableCells) {
-    const cellSig = buildCellSignature(cell, windDeg, timestamp, moonIllumination, ranges, depthChangeLookup);
-    const score = similarityScore(referenceSignature, cellSig, weights);
+    const cellSig = buildCellSignature(
+      cell, windDeg, timestamp, moonIllumination, ranges, depthChangeLookup,
+      sunriseHour, sunsetHour,
+    );
+    const score = similarityScore(adjustedRef, cellSig, weights);
 
     if (score >= threshold) {
       results.push({
@@ -453,6 +520,7 @@ export function findSimilarSpots(
         lat: cell.lat,
         score,
         signature: cellSig,
+        isOrigin: options.originCellId != null && cell.id === options.originCellId,
       });
     }
   }
@@ -503,6 +571,10 @@ export interface HotspotZone {
   count: number;
   radius_deg: number; // approximate zone radius
   topResult: MatchResult;
+  /** True if any result in the cluster is the user's reference catch cell —
+   *  lets the map style this zone distinctly so the user knows "your spot"
+   *  is in here. */
+  containsOrigin: boolean;
 }
 
 /**
@@ -549,6 +621,7 @@ export function clusterHotspots(
       avgScore,
       topScore: topResult.score,
       count: members.length,
+      containsOrigin: members.some((m) => m.isOrigin),
       radius_deg: Math.max(clusterRadius * 0.4, maxDist),
       topResult,
     });
