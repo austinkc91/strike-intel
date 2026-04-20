@@ -63,6 +63,9 @@ export function TripPlanPanel({
   const [selectedPatternCatchId, setSelectedPatternCatchId] = useState<string | null>(null);
   const [showAllMatches, setShowAllMatches] = useState(false);
   const [matchThreshold, setMatchThreshold] = useState(0.8);
+  // false = full sheet expanded; true = small bottom bar so the user can
+  // see the map underneath while spot picks stay highlighted.
+  const [collapsed, setCollapsed] = useState(false);
 
   const ranges = useMemo(() => computeNormRanges(grid), [grid]);
 
@@ -213,6 +216,92 @@ export function TripPlanPanel({
 
   const briefing = focusedHourData?.briefing ?? [];
   const hazard = focusedHourData?.hasHazard ?? false;
+  const topScore = results[0]?.score ?? 0;
+  const patternLabel = patternCatch?.species ?? `${SPECIES_LABELS[species]} pattern`;
+
+  // Collapsed bar — sits at the bottom of the screen, leaves the map visible.
+  // Tap-to-expand reopens the full sheet; X fully closes (clears the panel
+  // but the spot markers persist on the map until the user clears them).
+  if (collapsed) {
+    return (
+      <div
+        className="floating-panel"
+        style={{
+          position: 'absolute',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          padding: '12px 14px',
+          borderRadius: '14px 14px 0 0',
+          zIndex: 50,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+        }}
+      >
+        <button
+          onClick={() => setCollapsed(false)}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            background: 'none',
+            border: 'none',
+            color: 'inherit',
+            cursor: 'pointer',
+            textAlign: 'left',
+            padding: 0,
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-text)' }}>
+            {results.length} Similar Spots Found
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginTop: 2 }}>
+            {patternLabel}
+            {topScore > 0 && ` · Top match: ${Math.round(topScore * 100)}%`}
+            {' · Tap to expand'}
+          </div>
+        </button>
+
+        <select
+          value={matchThreshold}
+          onChange={(e) => setMatchThreshold(parseFloat(e.target.value))}
+          style={{
+            background: 'var(--color-bg)',
+            border: '1px solid var(--color-border)',
+            borderRadius: 6,
+            color: 'var(--color-text)',
+            fontSize: 11,
+            fontWeight: 600,
+            padding: '4px 6px',
+            cursor: 'pointer',
+          }}
+        >
+          <option value="0.95">95%+</option>
+          <option value="0.9">90%+</option>
+          <option value="0.85">85%+</option>
+          <option value="0.8">80%+</option>
+          <option value="0.75">75%+</option>
+          <option value="0.7">70%+</option>
+        </select>
+
+        <button
+          onClick={onClose}
+          aria-label="Close trip plan"
+          style={{
+            background: 'none',
+            border: 'none',
+            color: 'var(--color-text-secondary)',
+            fontSize: 22,
+            lineHeight: 1,
+            padding: '0 4px',
+            cursor: 'pointer',
+          }}
+        >
+          &times;
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="bottom-sheet" style={{ maxHeight: '85vh', overflowY: 'auto' }}>
@@ -229,7 +318,7 @@ export function TripPlanPanel({
           </div>
         </div>
         <button
-          onClick={onClose}
+          onClick={() => setCollapsed(true)}
           style={{ background: 'none', color: 'var(--color-text-secondary)', fontSize: 14 }}
         >
           Close
