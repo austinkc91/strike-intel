@@ -5,9 +5,10 @@ import { useCatches } from '../hooks/useCatches';
 import { moonPhaseEmoji, getMoonPhase } from '../services/moonPhase';
 import { fetchWeatherForCatch, windDirectionToCompass, conditionLabel, pressureTrendSymbol } from '../services/weather';
 import { matchConditions, type ConditionsMatch } from '../services/conditionsMatcher';
+import { CatchStatsView } from '../components/catch/CatchStatsView';
 import type { Catch, CatchWeather } from '../types';
 
-type SortMode = 'recent' | 'best-today';
+type SortMode = 'recent' | 'best-today' | 'stats';
 
 interface CatchFilters {
   species: string[];           // empty = all species
@@ -233,10 +234,21 @@ export function CatchesPage() {
           >
             Best for Today
           </button>
+          <button
+            className={sortMode === 'stats' ? 'active' : ''}
+            onClick={() => setSortMode('stats')}
+          >
+            Stats
+          </button>
         </div>
       )}
 
-      {filterCount > 0 && (
+      {/* Stats mode renders the analytics view in place of the catch list.
+          Stats use the full catches set (filters apply to list/best-today
+          modes only) so totals don't change as the user toggles filters. */}
+      {sortMode === 'stats' && <CatchStatsView catches={catches} />}
+
+      {filterCount > 0 && sortMode !== 'stats' && (
         <ActiveFilterChips
           filters={filters}
           onRemove={(patch) => setFilters((f) => ({ ...f, ...patch }))}
@@ -280,7 +292,7 @@ export function CatchesPage() {
         </div>
       )}
 
-      {!loading && catches.length > 0 && filteredCatches.length === 0 && (
+      {!loading && catches.length > 0 && filteredCatches.length === 0 && sortMode !== 'stats' && (
         <div className="empty-state">
           <div className="empty-state-icon">🔎</div>
           <div className="subheading">No catches match these filters</div>
@@ -296,17 +308,19 @@ export function CatchesPage() {
         </div>
       )}
 
-      <div className="stack stack-gap-2">
-        {displayCatches.map(({ catch_: c, match }) => (
-          <CatchCard
-            key={c.id}
-            catch_={c}
-            match={match}
-            sortMode={sortMode}
-            onTap={() => setActionSheetCatch(c)}
-          />
-        ))}
-      </div>
+      {sortMode !== 'stats' && (
+        <div className="stack stack-gap-2">
+          {displayCatches.map(({ catch_: c, match }) => (
+            <CatchCard
+              key={c.id}
+              catch_={c}
+              match={match}
+              sortMode={sortMode}
+              onTap={() => setActionSheetCatch(c)}
+            />
+          ))}
+        </div>
+      )}
 
       {actionSheetCatch && (
         <CatchActionSheet

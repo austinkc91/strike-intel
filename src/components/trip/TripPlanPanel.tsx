@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { computeWeeklyForecast, type ForecastDay } from '../../services/forecast';
 import { computeHourlyScores, findBestWindows, type HourScore } from '../../services/hourlyScores';
 import { fetchCurrentWaterTempNear } from '../../services/waterTemp';
+import { fetchLakeStateTexoma, type LakeStateSnapshot } from '../../services/lakeState';
 import { getDayInfo, hoursOfDay } from '../../services/astronomy';
 import { getSolunarWindows } from '../../services/solunar';
 import { SPECIES_LABELS } from '../../services/fishScoring';
@@ -68,6 +69,7 @@ export function TripPlanPanel({
   const [selectedPatternCatchId, setSelectedPatternCatchId] = useState<string | null>(null);
   const [showAllMatches, setShowAllMatches] = useState(false);
   const [matchThreshold, setMatchThreshold] = useState(0.9);
+  const [lakeState, setLakeState] = useState<LakeStateSnapshot | null>(null);
   // false = full sheet expanded; true = small bottom bar so the user can
   // see the map underneath while spot picks stay highlighted.
   const [collapsed, setCollapsed] = useState(false);
@@ -103,6 +105,9 @@ export function TripPlanPanel({
         setWaterTempF(wt.temp_f);
       })
       .catch(() => { /* USGS optional */ });
+    fetchLakeStateTexoma()
+      .then((s) => { if (!cancelled && s) setLakeState(s); })
+      .catch(() => { /* USACE optional */ });
     return () => { cancelled = true; };
   }, [lakeCenter.latitude, lakeCenter.longitude]);
 
@@ -491,6 +496,41 @@ export function TripPlanPanel({
       {focusedHourData && (
         <div className="card section" style={{ marginBottom: 14 }}>
           <ConditionsStrip weather={focusedHourData.rep} />
+        </div>
+      )}
+
+      {/* Lake state line — USACE elevation + dam release */}
+      {lakeState && (
+        <div className="card section" style={{ marginBottom: 14, padding: '10px 12px' }}>
+          <div className="meta" style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 4 }}>
+            Lake state
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, fontSize: 13 }}>
+            <div>
+              <span style={{ fontWeight: 700 }}>{lakeState.elevation_ft.toFixed(1)}ft</span>
+              <span className="meta" style={{ marginLeft: 6, fontSize: 11 }}>
+                {lakeState.elevation24hDelta_ft >= 0 ? '↑' : '↓'} {Math.abs(lakeState.elevation24hDelta_ft).toFixed(2)}ft 24h
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{
+                width: 6, height: 6, borderRadius: '50%',
+                background: lakeState.generating ? 'var(--color-good)' : 'var(--color-text-muted)',
+                boxShadow: lakeState.generating ? '0 0 6px var(--color-good)' : 'none',
+              }} />
+              <span style={{ fontWeight: 700, color: lakeState.generating ? 'var(--color-good)' : 'var(--color-text)' }}>
+                {lakeState.releaseFlow_cfs.toLocaleString()} cfs
+              </span>
+              <span className="meta" style={{ fontSize: 11 }}>
+                · {lakeState.generating ? 'Generating' : 'Idle'}
+              </span>
+            </div>
+          </div>
+          {lakeState.generating && (
+            <div className="meta" style={{ fontSize: 11, marginTop: 6, color: 'var(--color-good)' }}>
+              Striper feeding active below the dam
+            </div>
+          )}
         </div>
       )}
 

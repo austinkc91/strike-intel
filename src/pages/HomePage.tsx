@@ -13,10 +13,12 @@ import { SolunarArc } from '../components/weather/SolunarArc';
 import { PressureSparkline } from '../components/weather/PressureSparkline';
 import { WeekForecast } from '../components/weather/WeekForecast';
 import { ConditionsStrip } from '../components/weather/ConditionsStrip';
+import { LakeStateCard } from '../components/weather/LakeStateCard';
 import { Logo } from '../components/common/Logo';
 import { SpeciesPills } from '../components/common/SpeciesPills';
 import { HourlyScoreChart } from '../components/trip/HourlyScoreChart';
 import { fetchCurrentWaterTempNear } from '../services/waterTemp';
+import { fetchLakeStateTexoma, type LakeStateSnapshot } from '../services/lakeState';
 import { computeWeeklyForecast, type ForecastDay } from '../services/forecast';
 import { computeHourlyScores, findBestWindows, type HourScore } from '../services/hourlyScores';
 import { scoreFishingDay, SPECIES_LABELS } from '../services/fishScoring';
@@ -155,6 +157,7 @@ export function HomePage() {
   const [pressureHistory, setPressureHistory] = useState<PressureHistory | null>(null);
   const [weekForecast, setWeekForecast] = useState<ForecastDay[]>([]);
   const [todayHourly, setTodayHourly] = useState<HourScore[]>([]);
+  const [lakeState, setLakeState] = useState<LakeStateSnapshot | null>(null);
   const [breakdownOpen, setBreakdownOpen] = useState(false);
 
   const now = useMemo(() => new Date(), []);
@@ -196,6 +199,10 @@ export function HomePage() {
 
     fetchPressureHistory(LAKE.center.latitude, LAKE.center.longitude)
       .then((h) => { if (!cancelled) setPressureHistory(h); })
+      .catch(() => {});
+
+    fetchLakeStateTexoma()
+      .then((s) => { if (!cancelled && s) setLakeState(s); })
       .catch(() => {});
 
     return () => { cancelled = true; };
@@ -448,6 +455,9 @@ export function HomePage() {
             <PressureSparkline history={pressureHistory} />
           </div>
         )}
+
+        {/* Lake state — USACE elevation + dam release */}
+        <LakeStateCard state={lakeState} loading={lakeState === null} />
 
         {/* 7-day forecast */}
         {weekForecast.length > 0 && (
