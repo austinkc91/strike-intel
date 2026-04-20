@@ -31,7 +31,9 @@ export function WindRose({ direction_deg, speed_mph, gusts_mph }: WindRoseProps)
           <text x="33.5" y="21" textAnchor="middle" fill="var(--color-text-subtle)" fontSize="6.5" fontWeight="600">E</text>
           <text x="19" y="35.5" textAnchor="middle" fill="var(--color-text-subtle)" fontSize="6.5" fontWeight="600">S</text>
           <text x="4.5" y="21" textAnchor="middle" fill="var(--color-text-subtle)" fontSize="6.5" fontWeight="600">W</text>
-          <g transform={`rotate(${direction_deg}, 19, 19)`}>
+          {/* Arrow points in the direction the wind is blowing toward, not
+              the meteorological "from" direction — flip by 180°. */}
+          <g transform={`rotate(${direction_deg + 180}, 19, 19)`}>
             <line x1="19" y1="8" x2="19" y2="27" stroke="var(--color-accent)" strokeWidth="2" strokeLinecap="round" />
             <polygon points="19,7 15.5,14 22.5,14" fill="var(--color-accent)" />
           </g>
