@@ -5,6 +5,12 @@ import { fetchCurrentWaterTempNear } from '../../services/waterTemp';
 import { getDayInfo } from '../../services/astronomy';
 import { getSolunarWindows } from '../../services/solunar';
 import { SPECIES_LABELS } from '../../services/fishScoring';
+import { matchConditions, type ConditionsMatch } from '../../services/conditionsMatcher';
+import {
+  windDirectionToCompass,
+  pressureTrendSymbol,
+} from '../../services/weather';
+import { moonPhaseEmoji } from '../../services/moonPhase';
 import {
   buildSignature,
   computeNormRanges,
@@ -53,6 +59,9 @@ export function TripPlanPanel({
   const [waterTempF, setWaterTempF] = useState<number | null>(null);
   const [hourlyLoading, setHourlyLoading] = useState(false);
   const [results, setResults] = useState<MatchResult[]>([]);
+  // null = auto-pick best match. Otherwise locked to a specific catch.
+  const [selectedPatternCatchId, setSelectedPatternCatchId] = useState<string | null>(null);
+  const [showAllMatches, setShowAllMatches] = useState(false);
 
   const ranges = useMemo(() => computeNormRanges(grid), [grid]);
 
@@ -124,17 +133,56 @@ export function TripPlanPanel({
     return getSolunarWindows(selectedDay, lakeCenter.latitude, lakeCenter.longitude);
   }, [selectedDay, lakeCenter.latitude, lakeCenter.longitude]);
 
+  // Score every past catch against the focused hour's conditions. Catches
+  // logged on days that *felt* like the planned day are the best basis for
+  // pattern recommendations — better than just "most recent."
+  const matchedCatches = useMemo<Array<{ catch_: Catch; match: ConditionsMatch }>>(() => {
+    if (!focusedHourData || !dayInfo || catches.length === 0) return [];
+    const scored = catches.map((c) => {
+      if (!c.weather) {
+        return { catch_: c, match: { score: 0, details: [] } as ConditionsMatch };
+      }
+      const ts = c.timestamp?.toDate?.() ?? new Date();
+      const match = matchConditions(
+        focusedHourData.rep,
+        dayInfo.moonIllumination,
+        focusedHourData.date,
+        c.weather,
+        ts,
+      );
+      return { catch_: c, match };
+    });
+    scored.sort((a, b) => b.match.score - a.match.score);
+    return scored;
+  }, [catches, focusedHourData, dayInfo]);
+
+  // Catch whose pattern drives the spot recommendations. User can override
+  // by tapping one in the picker; otherwise we use the top match.
+  const patternCatch = useMemo<Catch | null>(() => {
+    if (selectedPatternCatchId) {
+      return catches.find((c) => c.id === selectedPatternCatchId) ?? null;
+    }
+    return matchedCatches[0]?.catch_ ?? null;
+  }, [selectedPatternCatchId, catches, matchedCatches]);
+
+  // Reset the pattern lock if the chosen catch is no longer in the list (e.g.
+  // it was deleted or filtered out).
+  useEffect(() => {
+    if (selectedPatternCatchId && !catches.find((c) => c.id === selectedPatternCatchId)) {
+      setSelectedPatternCatchId(null);
+    }
+  }, [catches, selectedPatternCatchId]);
+
   // Step 3 — recompute spot recommendations whenever the day, focused hour,
-  // species, catches, or grid changes.
+  // species, the picked pattern catch, or grid changes.
   useEffect(() => {
     if (!selectedDay || grid.length === 0 || !focusedHourData || !dayInfo) {
       setResults([]);
       onResultsChange([]);
       return;
     }
-    const useCatchSig = catches.length > 0;
-    const refSig = useCatchSig
-      ? signatureFromCatch(catches[0], selectedDay, dayInfo.moonIllumination, ranges)
+    const refSig = patternCatch
+      ? signatureFromCatch(patternCatch, selectedDay, dayInfo.moonIllumination, ranges)
       : defaultSignatureFor(
           species,
           {
@@ -148,8 +196,6 @@ export function TripPlanPanel({
           ranges,
         );
 
-    console.log('[TripPlan] signature path:', useCatchSig ? 'catch-based' : 'default', { species });
-
     const matches = findSimilarSpots(
       refSig,
       grid,
@@ -157,12 +203,12 @@ export function TripPlanPanel({
       selectedDay,
       dayInfo.moonIllumination,
       ranges,
-      getSpeciesWeights(useCatchSig ? catches[0].species : species),
+      getSpeciesWeights(patternCatch?.species ?? species),
       0.8,
     );
     setResults(matches);
     onResultsChange(matches);
-  }, [selectedDay, focusedHourData, species, catches, grid, ranges, dayInfo, onResultsChange]);
+  }, [selectedDay, focusedHourData, species, patternCatch, grid, ranges, dayInfo, onResultsChange]);
 
   const briefing = focusedHourData?.briefing ?? [];
   const hazard = focusedHourData?.hasHazard ?? false;
@@ -314,14 +360,67 @@ export function TripPlanPanel({
         </div>
       )}
 
+      {/* Pattern picker — past catches scored against the planned day */}
+      {matchedCatches.length > 0 && focusedHourData && (
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+            <div className="eyebrow">Pattern from a similar day</div>
+            {matchedCatches.length > 3 && (
+              <button
+                onClick={() => setShowAllMatches((v) => !v)}
+                style={{
+                  background: 'none', border: 'none', cursor: 'pointer',
+                  fontSize: 11, fontWeight: 600, letterSpacing: '0.04em',
+                  textTransform: 'uppercase', color: 'var(--color-accent)',
+                }}
+              >
+                {showAllMatches ? 'Show top 3' : `Show all (${matchedCatches.length})`}
+              </button>
+            )}
+          </div>
+
+          <div className="meta" style={{ fontSize: 11, marginBottom: 8 }}>
+            Past catches ranked by how closely their conditions match {formatHour(focusedHourData.hour)} on the picked day. Tap one to drive spot picks below.
+          </div>
+
+          <div className="stack stack-gap-2">
+            {(showAllMatches ? matchedCatches : matchedCatches.slice(0, 3)).map(({ catch_: c, match }) => (
+              <PatternCatchCard
+                key={c.id}
+                catch_={c}
+                match={match}
+                isSelected={patternCatch?.id === c.id}
+                onTap={() => setSelectedPatternCatchId(c.id === selectedPatternCatchId ? null : c.id)}
+              />
+            ))}
+          </div>
+
+          {selectedPatternCatchId && (
+            <button
+              onClick={() => setSelectedPatternCatchId(null)}
+              style={{
+                marginTop: 8,
+                background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                fontSize: 11, color: 'var(--color-text-muted)',
+                textDecoration: 'underline',
+              }}
+            >
+              Reset to best auto-match
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Spot recommendations */}
       {results.length > 0 && (
         <div style={{ marginBottom: 14 }}>
           <div className="eyebrow" style={{ marginBottom: 8 }}>
-            {catches.length > 0 ? 'Spots like your patterns' : 'Spots for these conditions'}
+            {patternCatch
+              ? `Spots like ${patternCatch.species ?? 'this catch'}'s pattern`
+              : 'Spots for these conditions'}
           </div>
           <SimilarSpotsList results={results} onSpotClick={onSpotClick} />
-          {catches.length === 0 && (
+          {!patternCatch && (
             <div className="meta" style={{ fontSize: 11, marginTop: 6 }}>
               Default {SPECIES_LABELS[species].toLowerCase()} signature for the focused hour. Log catches to personalize.
             </div>
@@ -329,6 +428,110 @@ export function TripPlanPanel({
         </div>
       )}
     </div>
+  );
+}
+
+function PatternCatchCard({
+  catch_: c,
+  match,
+  isSelected,
+  onTap,
+}: {
+  catch_: Catch;
+  match: ConditionsMatch;
+  isSelected: boolean;
+  onTap: () => void;
+}) {
+  const ts = c.timestamp?.toDate?.();
+  const matchPct = Math.round(match.score * 100);
+  const w = c.weather;
+  const accent = isSelected ? 'var(--color-accent)' : 'var(--color-border)';
+
+  return (
+    <button
+      onClick={onTap}
+      style={{
+        textAlign: 'left',
+        padding: '10px 12px',
+        background: isSelected ? 'rgba(94,184,230,0.10)' : 'var(--color-surface)',
+        border: `1px solid ${accent}`,
+        borderLeft: `3px solid ${isSelected ? 'var(--color-accent)' : 'var(--color-border-strong)'}`,
+        borderRadius: 'var(--radius)',
+        color: 'var(--color-text)',
+        cursor: 'pointer',
+        width: '100%',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: '-0.01em', lineHeight: 1.2 }}>
+            {c.species ?? 'Unknown'}
+            {c.weight_lbs != null && (
+              <span style={{ color: 'var(--color-text-muted)', fontWeight: 500, marginLeft: 6 }}>
+                · {c.weight_lbs} lbs
+              </span>
+            )}
+          </div>
+          <div className="meta" style={{ marginTop: 2, fontSize: 11 }}>
+            {ts?.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) ?? 'Unknown date'}
+            {ts && (
+              <>
+                <span style={{ color: 'var(--color-text-subtle)' }}> · </span>
+                {ts.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+              </>
+            )}
+          </div>
+        </div>
+        <div style={{
+          fontSize: 13,
+          fontWeight: 800,
+          letterSpacing: '-0.01em',
+          color: matchPct >= 75 ? 'var(--color-good)' : matchPct >= 55 ? 'var(--color-accent)' : 'var(--color-text-muted)',
+        }}>
+          {matchPct}% match
+        </div>
+      </div>
+
+      {w && (
+        <div style={{
+          marginTop: 6,
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '2px 10px',
+          fontSize: 11,
+          color: 'var(--color-text-muted)',
+        }}>
+          <span>{Math.round(w.temp_f)}°F</span>
+          <span>·</span>
+          <span>{windDirectionToCompass(w.wind_direction_deg)} {Math.round(w.wind_speed_mph)}mph</span>
+          <span>·</span>
+          <span>{Math.round(w.pressure_hpa)}hPa {pressureTrendSymbol(w.pressure_trend)}</span>
+          {w.moon_phase && (
+            <>
+              <span>·</span>
+              <span>{moonPhaseEmoji(w.moon_phase)}</span>
+            </>
+          )}
+        </div>
+      )}
+
+      {match.details.length > 0 && (
+        <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+          {match.details.slice(0, 3).map((d, i) => (
+            <span key={i} style={{
+              fontSize: 10,
+              padding: '2px 7px',
+              borderRadius: 999,
+              background: 'rgba(94,184,230,0.10)',
+              color: 'var(--color-accent)',
+              fontWeight: 600,
+            }}>
+              {d}
+            </span>
+          ))}
+        </div>
+      )}
+    </button>
   );
 }
 
