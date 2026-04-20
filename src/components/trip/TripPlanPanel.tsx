@@ -62,6 +62,7 @@ export function TripPlanPanel({
   // null = auto-pick best match. Otherwise locked to a specific catch.
   const [selectedPatternCatchId, setSelectedPatternCatchId] = useState<string | null>(null);
   const [showAllMatches, setShowAllMatches] = useState(false);
+  const [matchThreshold, setMatchThreshold] = useState(0.8);
 
   const ranges = useMemo(() => computeNormRanges(grid), [grid]);
 
@@ -204,11 +205,11 @@ export function TripPlanPanel({
       dayInfo.moonIllumination,
       ranges,
       getSpeciesWeights(patternCatch?.species ?? species),
-      0.8,
+      matchThreshold,
     );
     setResults(matches);
     onResultsChange(matches);
-  }, [selectedDay, focusedHourData, species, patternCatch, grid, ranges, dayInfo, onResultsChange]);
+  }, [selectedDay, focusedHourData, species, patternCatch, grid, ranges, dayInfo, matchThreshold, onResultsChange]);
 
   const briefing = focusedHourData?.briefing ?? [];
   const hazard = focusedHourData?.hasHazard ?? false;
@@ -412,15 +413,44 @@ export function TripPlanPanel({
       )}
 
       {/* Spot recommendations */}
-      {results.length > 0 && (
+      {(results.length > 0 || matchThreshold > 0.7) && (
         <div style={{ marginBottom: 14 }}>
-          <div className="eyebrow" style={{ marginBottom: 8 }}>
-            {patternCatch
-              ? `Spots like ${patternCatch.species ?? 'this catch'}'s pattern`
-              : 'Spots for these conditions'}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8 }}>
+            <div className="eyebrow">
+              {patternCatch
+                ? `Spots like ${patternCatch.species ?? 'this catch'}'s pattern`
+                : 'Spots for these conditions'}
+            </div>
+            <select
+              value={matchThreshold}
+              onChange={(e) => setMatchThreshold(parseFloat(e.target.value))}
+              style={{
+                background: 'var(--color-bg)',
+                border: '1px solid var(--color-border)',
+                borderRadius: 6,
+                color: 'var(--color-text)',
+                fontSize: 11,
+                fontWeight: 600,
+                padding: '4px 6px',
+                cursor: 'pointer',
+              }}
+            >
+              <option value="0.95">95%+</option>
+              <option value="0.9">90%+</option>
+              <option value="0.85">85%+</option>
+              <option value="0.8">80%+</option>
+              <option value="0.75">75%+</option>
+              <option value="0.7">70%+</option>
+            </select>
           </div>
-          <SimilarSpotsList results={results} onSpotClick={onSpotClick} />
-          {!patternCatch && (
+          {results.length > 0 ? (
+            <SimilarSpotsList results={results} onSpotClick={onSpotClick} />
+          ) : (
+            <div className="meta" style={{ fontSize: 12, padding: '12px 0' }}>
+              No spots at {Math.round(matchThreshold * 100)}%+ — try lowering the threshold.
+            </div>
+          )}
+          {!patternCatch && results.length > 0 && (
             <div className="meta" style={{ fontSize: 11, marginTop: 6 }}>
               Default {SPECIES_LABELS[species].toLowerCase()} signature for the focused hour. Log catches to personalize.
             </div>
