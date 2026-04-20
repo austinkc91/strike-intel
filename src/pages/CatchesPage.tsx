@@ -9,6 +9,54 @@ import type { Catch, CatchWeather } from '../types';
 
 type SortMode = 'recent' | 'best-today';
 
+interface CatchFilters {
+  species: string[];           // empty = all species
+  fromDate: Date | null;       // inclusive lower bound
+  toDate: Date | null;         // inclusive upper bound (date only — extended to end of day)
+  minWeightLbs: number | null; // inclusive
+  maxWeightLbs: number | null; // inclusive
+}
+
+const EMPTY_FILTERS: CatchFilters = {
+  species: [],
+  fromDate: null,
+  toDate: null,
+  minWeightLbs: null,
+  maxWeightLbs: null,
+};
+
+function activeFilterCount(f: CatchFilters): number {
+  let n = 0;
+  if (f.species.length > 0) n++;
+  if (f.fromDate || f.toDate) n++;
+  if (f.minWeightLbs != null || f.maxWeightLbs != null) n++;
+  return n;
+}
+
+function passesFilters(c: Catch, f: CatchFilters): boolean {
+  if (f.species.length > 0 && (!c.species || !f.species.includes(c.species))) return false;
+
+  const ts = c.timestamp?.toDate?.();
+  if (f.fromDate) {
+    if (!ts || ts.getTime() < f.fromDate.getTime()) return false;
+  }
+  if (f.toDate) {
+    // Treat the upper bound as end-of-day (inclusive).
+    const eod = new Date(f.toDate);
+    eod.setHours(23, 59, 59, 999);
+    if (!ts || ts.getTime() > eod.getTime()) return false;
+  }
+
+  const w = c.weight_lbs;
+  if (f.minWeightLbs != null) {
+    if (w == null || w < f.minWeightLbs) return false;
+  }
+  if (f.maxWeightLbs != null) {
+    if (w == null || w > f.maxWeightLbs) return false;
+  }
+  return true;
+}
+
 export function CatchesPage() {
   const navigate = useNavigate();
   const { selectedLake, setPendingPatternCatchId, setPendingEditCatchId } = useAppStore();
@@ -17,6 +65,20 @@ export function CatchesPage() {
   const [currentWeather, setCurrentWeather] = useState<CatchWeather | null>(null);
   const [weatherLoading, setWeatherLoading] = useState(false);
   const [actionSheetCatch, setActionSheetCatch] = useState<Catch | null>(null);
+  const [filters, setFilters] = useState<CatchFilters>(EMPTY_FILTERS);
+  const [showFilterSheet, setShowFilterSheet] = useState(false);
+
+  const filteredCatches = useMemo(
+    () => catches.filter((c) => passesFilters(c, filters)),
+    [catches, filters],
+  );
+
+  // Species options derived from the user's catches — only show what exists.
+  const availableSpecies = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of catches) if (c.species) set.add(c.species);
+    return Array.from(set).sort();
+  }, [catches]);
 
   const handleFindSimilar = (c: Catch) => {
     setPendingPatternCatchId(c.id);
@@ -66,7 +128,7 @@ export function CatchesPage() {
   const scoredCatches = useMemo(() => {
     if (!currentWeather || sortMode !== 'best-today') return null;
     const scored: { catch_: Catch; match: ConditionsMatch }[] = [];
-    for (const c of catches) {
+    for (const c of filteredCatches) {
       if (!c.weather) {
         scored.push({ catch_: c, match: { score: 0, details: [] } });
         continue;
@@ -77,7 +139,7 @@ export function CatchesPage() {
     }
     scored.sort((a, b) => b.match.score - a.match.score);
     return scored;
-  }, [catches, currentWeather, sortMode, currentMoon.illumination]);
+  }, [filteredCatches, currentWeather, sortMode, currentMoon.illumination]);
 
   if (!selectedLake) {
     return (
@@ -99,18 +161,62 @@ export function CatchesPage() {
 
   const displayCatches = sortMode === 'best-today' && scoredCatches
     ? scoredCatches
-    : catches.map(c => ({ catch_: c, match: null as ConditionsMatch | null }));
+    : filteredCatches.map(c => ({ catch_: c, match: null as ConditionsMatch | null }));
+
+  const filterCount = activeFilterCount(filters);
 
   return (
     <div className="page page-top">
-      <div className="page-header">
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
         <div>
           <div className="eyebrow">{selectedLake.name}</div>
           <h1 className="display" style={{ marginTop: 2 }}>Catches</h1>
           <div className="meta" style={{ marginTop: 4 }}>
-            {catches.length} logged
+            {filterCount > 0
+              ? `${filteredCatches.length} of ${catches.length} shown`
+              : `${catches.length} logged`}
           </div>
         </div>
+
+        {catches.length > 0 && (
+          <button
+            onClick={() => setShowFilterSheet(true)}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '8px 12px',
+              borderRadius: 999,
+              fontSize: 12,
+              fontWeight: 600,
+              letterSpacing: '0.04em',
+              textTransform: 'uppercase',
+              color: filterCount > 0 ? '#041322' : 'var(--color-text)',
+              background: filterCount > 0 ? 'var(--color-accent)' : 'rgba(255,255,255,0.05)',
+              border: `1px solid ${filterCount > 0 ? 'var(--color-accent)' : 'var(--color-border-strong)'}`,
+              cursor: 'pointer',
+              flexShrink: 0,
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
+            </svg>
+            Filter
+            {filterCount > 0 && (
+              <span style={{
+                minWidth: 16, height: 16, borderRadius: 8,
+                padding: '0 5px',
+                background: 'rgba(4,19,34,0.25)',
+                color: '#041322',
+                fontSize: 10,
+                fontWeight: 800,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}>{filterCount}</span>
+            )}
+          </button>
+        )}
       </div>
 
       {catches.length > 0 && (
@@ -128,6 +234,14 @@ export function CatchesPage() {
             Best for Today
           </button>
         </div>
+      )}
+
+      {filterCount > 0 && (
+        <ActiveFilterChips
+          filters={filters}
+          onRemove={(patch) => setFilters((f) => ({ ...f, ...patch }))}
+          onClearAll={() => setFilters(EMPTY_FILTERS)}
+        />
       )}
 
       {sortMode === 'best-today' && currentWeather && (
@@ -166,6 +280,22 @@ export function CatchesPage() {
         </div>
       )}
 
+      {!loading && catches.length > 0 && filteredCatches.length === 0 && (
+        <div className="empty-state">
+          <div className="empty-state-icon">🔎</div>
+          <div className="subheading">No catches match these filters</div>
+          <div className="meta" style={{ marginBottom: 12 }}>
+            Loosen them up or clear all and try again.
+          </div>
+          <button
+            className="btn btn-secondary"
+            onClick={() => setFilters(EMPTY_FILTERS)}
+          >
+            Clear filters
+          </button>
+        </div>
+      )}
+
       <div className="stack stack-gap-2">
         {displayCatches.map(({ catch_: c, match }) => (
           <CatchCard
@@ -186,6 +316,16 @@ export function CatchesPage() {
           onViewOnMap={handleViewOnMap}
           onEdit={handleEdit}
           onDelete={handleDelete}
+        />
+      )}
+
+      {showFilterSheet && (
+        <CatchFiltersSheet
+          filters={filters}
+          availableSpecies={availableSpecies}
+          onChange={setFilters}
+          onClose={() => setShowFilterSheet(false)}
+          onClearAll={() => setFilters(EMPTY_FILTERS)}
         />
       )}
     </div>
@@ -485,3 +625,391 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
     </div>
   );
 }
+
+// ============================================================
+// Active filter chips — displayed under the segmented control when any
+// filter is active. Tap the X on a chip to remove just that facet, or
+// "Clear all" to reset.
+// ============================================================
+
+function ActiveFilterChips({
+  filters,
+  onRemove,
+  onClearAll,
+}: {
+  filters: CatchFilters;
+  onRemove: (patch: Partial<CatchFilters>) => void;
+  onClearAll: () => void;
+}) {
+  const chips: Array<{ key: string; label: string; clear: () => void }> = [];
+
+  if (filters.species.length > 0) {
+    chips.push({
+      key: 'species',
+      label: filters.species.length === 1
+        ? filters.species[0]
+        : `${filters.species.length} species`,
+      clear: () => onRemove({ species: [] }),
+    });
+  }
+  if (filters.fromDate || filters.toDate) {
+    const fmt = (d: Date) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    let label: string;
+    if (filters.fromDate && filters.toDate) label = `${fmt(filters.fromDate)} – ${fmt(filters.toDate)}`;
+    else if (filters.fromDate) label = `Since ${fmt(filters.fromDate)}`;
+    else label = `Until ${fmt(filters.toDate!)}`;
+    chips.push({ key: 'date', label, clear: () => onRemove({ fromDate: null, toDate: null }) });
+  }
+  if (filters.minWeightLbs != null || filters.maxWeightLbs != null) {
+    let label: string;
+    if (filters.minWeightLbs != null && filters.maxWeightLbs != null) {
+      label = `${filters.minWeightLbs}–${filters.maxWeightLbs} lbs`;
+    } else if (filters.minWeightLbs != null) {
+      label = `${filters.minWeightLbs}+ lbs`;
+    } else {
+      label = `≤ ${filters.maxWeightLbs} lbs`;
+    }
+    chips.push({ key: 'weight', label, clear: () => onRemove({ minWeightLbs: null, maxWeightLbs: null }) });
+  }
+
+  return (
+    <div className="section" style={{
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap',
+      alignItems: 'center',
+    }}>
+      {chips.map((chip) => (
+        <span key={chip.key} style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4,
+          padding: '5px 6px 5px 10px',
+          borderRadius: 999,
+          fontSize: 12,
+          fontWeight: 600,
+          background: 'rgba(94,184,230,0.12)',
+          border: '1px solid rgba(94,184,230,0.35)',
+          color: 'var(--color-accent)',
+        }}>
+          {chip.label}
+          <button
+            onClick={chip.clear}
+            aria-label={`Remove ${chip.label}`}
+            style={{
+              width: 18, height: 18, borderRadius: 999,
+              background: 'transparent', border: 'none',
+              color: 'var(--color-accent)',
+              cursor: 'pointer',
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              padding: 0,
+            }}
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
+              <line x1="6" y1="6" x2="18" y2="18" />
+              <line x1="18" y1="6" x2="6" y2="18" />
+            </svg>
+          </button>
+        </span>
+      ))}
+      <button
+        onClick={onClearAll}
+        style={{
+          padding: '5px 10px',
+          borderRadius: 999,
+          fontSize: 11,
+          fontWeight: 600,
+          letterSpacing: '0.04em',
+          textTransform: 'uppercase',
+          color: 'var(--color-text-muted)',
+          background: 'transparent',
+          border: '1px solid var(--color-border-strong)',
+          cursor: 'pointer',
+        }}
+      >
+        Clear all
+      </button>
+    </div>
+  );
+}
+
+// ============================================================
+// Filter sheet — bottom sheet for editing all filters at once. Edits
+// apply live (no Apply button) since the list is right behind it.
+// ============================================================
+
+function CatchFiltersSheet({
+  filters,
+  availableSpecies,
+  onChange,
+  onClose,
+  onClearAll,
+}: {
+  filters: CatchFilters;
+  availableSpecies: string[];
+  onChange: (f: CatchFilters) => void;
+  onClose: () => void;
+  onClearAll: () => void;
+}) {
+  const toggleSpecies = (s: string) => {
+    const next = filters.species.includes(s)
+      ? filters.species.filter((x) => x !== s)
+      : [...filters.species, s];
+    onChange({ ...filters, species: next });
+  };
+
+  const setDateRange = (from: Date | null, to: Date | null) => {
+    onChange({ ...filters, fromDate: from, toDate: to });
+  };
+
+  const dateInputValue = (d: Date | null): string => {
+    if (!d) return '';
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+
+  const parseDateInput = (s: string): Date | null => {
+    if (!s) return null;
+    const [y, m, d] = s.split('-').map(Number);
+    if (!y || !m || !d) return null;
+    return new Date(y, m - 1, d);
+  };
+
+  const setMinWeight = (v: string) => {
+    const n = v === '' ? null : parseFloat(v);
+    onChange({ ...filters, minWeightLbs: Number.isFinite(n as number) ? (n as number) : null });
+  };
+  const setMaxWeight = (v: string) => {
+    const n = v === '' ? null : parseFloat(v);
+    onChange({ ...filters, maxWeightLbs: Number.isFinite(n as number) ? (n as number) : null });
+  };
+
+  // Date presets — start of day for "since X" semantics
+  const startOfDayMinusDays = (n: number): Date => {
+    const d = new Date();
+    d.setDate(d.getDate() - n);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  };
+  const startOfYear = (): Date => {
+    const d = new Date();
+    d.setMonth(0, 1);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  };
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  return (
+    <>
+      <div
+        onClick={onClose}
+        style={{
+          position: 'fixed', inset: 0,
+          background: 'rgba(0,0,0,0.55)',
+          zIndex: 199,
+          animation: 'fadeIn 0.2s',
+        }}
+      />
+      <div className="bottom-sheet" style={{
+        maxHeight: '85vh',
+        overflowY: 'auto',
+        paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)',
+      }}>
+        <div className="bottom-sheet-handle" />
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <div>
+            <div className="eyebrow">Filter</div>
+            <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700, marginTop: 2, letterSpacing: '-0.02em' }}>
+              Refine catches
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            style={{ background: 'none', color: 'var(--color-text-secondary)', fontSize: 14 }}
+          >
+            Done
+          </button>
+        </div>
+
+        {/* Species */}
+        <div className="section">
+          <div className="eyebrow" style={{ marginBottom: 8 }}>Species</div>
+          {availableSpecies.length === 0 ? (
+            <div className="meta">No species yet — log a catch first.</div>
+          ) : (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {availableSpecies.map((s) => {
+                const active = filters.species.includes(s);
+                return (
+                  <button
+                    key={s}
+                    onClick={() => toggleSpecies(s)}
+                    style={{
+                      padding: '7px 12px',
+                      borderRadius: 999,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      background: active ? 'var(--color-accent)' : 'rgba(255,255,255,0.05)',
+                      color: active ? '#041322' : 'var(--color-text-muted)',
+                      border: `1px solid ${active ? 'var(--color-accent)' : 'var(--color-border-strong)'}`,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {s}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Date range */}
+        <div className="section">
+          <div className="eyebrow" style={{ marginBottom: 8 }}>Date range</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+            <PresetButton
+              label="Last 7 days"
+              active={
+                filters.fromDate?.getTime() === startOfDayMinusDays(7).getTime() &&
+                !filters.toDate
+              }
+              onClick={() => setDateRange(startOfDayMinusDays(7), null)}
+            />
+            <PresetButton
+              label="Last 30 days"
+              active={
+                filters.fromDate?.getTime() === startOfDayMinusDays(30).getTime() &&
+                !filters.toDate
+              }
+              onClick={() => setDateRange(startOfDayMinusDays(30), null)}
+            />
+            <PresetButton
+              label="This year"
+              active={
+                filters.fromDate?.getTime() === startOfYear().getTime() &&
+                !filters.toDate
+              }
+              onClick={() => setDateRange(startOfYear(), null)}
+            />
+            <PresetButton
+              label="All time"
+              active={!filters.fromDate && !filters.toDate}
+              onClick={() => setDateRange(null, null)}
+            />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            <div>
+              <Label>From</Label>
+              <input
+                type="date"
+                value={dateInputValue(filters.fromDate)}
+                onChange={(e) => setDateRange(parseDateInput(e.target.value), filters.toDate)}
+                style={dateInputStyle}
+              />
+            </div>
+            <div>
+              <Label>To</Label>
+              <input
+                type="date"
+                value={dateInputValue(filters.toDate)}
+                onChange={(e) => setDateRange(filters.fromDate, parseDateInput(e.target.value))}
+                style={dateInputStyle}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Weight */}
+        <div className="section">
+          <div className="eyebrow" style={{ marginBottom: 8 }}>Weight (lbs)</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            <div>
+              <Label>Min</Label>
+              <input
+                type="number"
+                inputMode="decimal"
+                step="0.5"
+                min="0"
+                placeholder="any"
+                value={filters.minWeightLbs ?? ''}
+                onChange={(e) => setMinWeight(e.target.value)}
+                style={dateInputStyle}
+              />
+            </div>
+            <div>
+              <Label>Max</Label>
+              <input
+                type="number"
+                inputMode="decimal"
+                step="0.5"
+                min="0"
+                placeholder="any"
+                value={filters.maxWeightLbs ?? ''}
+                onChange={(e) => setMaxWeight(e.target.value)}
+                style={dateInputStyle}
+              />
+            </div>
+          </div>
+          <div className="meta" style={{ fontSize: 11, marginTop: 6 }}>
+            Catches without a recorded weight are excluded when this filter is set.
+          </div>
+        </div>
+
+        <div className="stack stack-gap-2" style={{ marginTop: 8 }}>
+          <button className="btn btn-secondary btn-block" onClick={onClearAll}>
+            Clear all filters
+          </button>
+          <button className="btn btn-action btn-block" onClick={onClose}>
+            Show {/* count handled implicitly via the underlying list */} results
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function PresetButton({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: '6px 11px',
+        borderRadius: 999,
+        fontSize: 11,
+        fontWeight: 600,
+        letterSpacing: '0.02em',
+        background: active ? 'var(--color-accent)' : 'rgba(255,255,255,0.05)',
+        color: active ? '#041322' : 'var(--color-text-muted)',
+        border: `1px solid ${active ? 'var(--color-accent)' : 'var(--color-border-strong)'}`,
+        cursor: 'pointer',
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+function Label({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{
+      fontSize: 10, fontWeight: 700, textTransform: 'uppercase',
+      letterSpacing: '0.1em', color: 'var(--color-text-subtle)', marginBottom: 4,
+    }}>
+      {children}
+    </div>
+  );
+}
+
+const dateInputStyle: React.CSSProperties = {
+  width: '100%',
+  padding: '10px 12px',
+  background: 'rgba(255,255,255,0.04)',
+  border: '1px solid rgba(255,255,255,0.10)',
+  borderRadius: 10,
+  color: 'var(--color-text)',
+  fontSize: 14,
+  outline: 'none',
+  colorScheme: 'dark',
+};
