@@ -200,7 +200,7 @@ export function MapPage() {
         onCatchClick={handleCatchClick}
         caughtNowLoading={geoLoading}
         currentWeather={currentWeather}
-        patternResults={showPattern ? patternResults.slice(0, 200) : []}
+        patternResults={(showPattern || showTripPlan) ? patternResults.slice(0, 200) : []}
       />
 
       {showForm && (
