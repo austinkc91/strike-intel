@@ -11,7 +11,17 @@ import {
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, auth, storage } from '../services/firebase';
+import { enrichCatchById } from '../services/catchEnrichment';
 import type { Catch, CatchFormData } from '../types';
+
+interface AddCatchOptions {
+  /** USGS station id for the active lake — when provided, enrichment fires
+   *  after the catch is saved. Pass `selectedLake.usgsStationId`. */
+  lakeUsgsStationId?: string | null;
+  /** Await the post-save enrichment instead of fire-and-forget. Useful for
+   *  flows that want the snapshot fields populated before navigating away. */
+  awaitEnrichment?: boolean;
+}
 
 export function useCatches(lakeId: string | null) {
   const [catches, setCatches] = useState<Catch[]>([]);
@@ -50,7 +60,7 @@ export function useCatches(lakeId: string | null) {
   }, [lakeId]);
 
   const addCatch = useCallback(
-    async (data: CatchFormData) => {
+    async (data: CatchFormData, options: AddCatchOptions = {}) => {
       if (!lakeId) throw new Error('No lake selected');
       const user = auth.currentUser;
       if (!user) throw new Error('Not authenticated');
@@ -94,6 +104,20 @@ export function useCatches(lakeId: string | null) {
       };
 
       const docRef = await addDoc(collection(db, 'lakes', lakeId, 'catches'), catchDoc);
+
+      if (options.lakeUsgsStationId !== undefined) {
+        const enrichPromise = enrichCatchById(
+          lakeId,
+          docRef.id,
+          data.location,
+          data.timestamp,
+          options.lakeUsgsStationId,
+        ).catch((err) => {
+          console.error('[useCatches] enrichment failed:', err);
+        });
+        if (options.awaitEnrichment) await enrichPromise;
+      }
+
       return docRef.id;
     },
     [lakeId],

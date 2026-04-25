@@ -9,11 +9,9 @@ import { useCatches } from '../hooks/useCatches';
 import { useGeolocation } from '../hooks/useGeolocation';
 import { fetchWeatherForCatch } from '../services/weather';
 import { getMoonPhase } from '../services/moonPhase';
-import { getSolunarWindows, isInFeedingWindow } from '../services/solunar';
 import { type GridCell, type MatchResult } from '../services/patternEngine';
 import { fetchLakeGrid } from '../services/lakeGrid';
-import { fetchSpotCharacteristics } from '../services/spotCharacteristics';
-import { fetchWaterTempNearAt } from '../services/waterTemp';
+import { enrichCatchById } from '../services/catchEnrichment';
 import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import type { Catch, CatchFormData, GeoPoint, CatchWeather } from '../types';
@@ -134,10 +132,10 @@ export function MapPage() {
       // refreshed against the historical endpoints.
       enrichCatch(selectedLake.id, editingCatchId, data.location, data.timestamp, selectedLake.usgsStationId);
     } else {
-      const newId = await addCatch(data);
-      if (selectedLake && newId) {
-        enrichCatch(selectedLake.id, newId, data.location, data.timestamp, selectedLake.usgsStationId);
-      }
+      // Enrichment now fires inside addCatch (fire-and-forget) so the catch
+      // gets its weather/water-temp/solunar snapshot regardless of which
+      // surface logged it.
+      await addCatch(data, { lakeUsgsStationId: selectedLake?.usgsStationId ?? null });
     }
     setPendingPin(null);
     setShowForm(false);
@@ -288,73 +286,7 @@ async function enrichCatch(
   lakeUsgsStationId: string | null,
 ) {
   try {
-    const catchRef = doc(db, 'lakes', lakeId, 'catches', catchId);
-
-    console.log('[enrichCatch] START', catchId, {
-      timestamp: timestamp.toISOString(),
-      timestampLocal: timestamp.toString(),
-      lat: location.latitude,
-      lng: location.longitude,
-    });
-
-    // Fetch weather, spot characteristics, and water temp in parallel.
-    // All three honor the catch's timestamp so a backdated log gets the
-    // historical conditions, not "now."
-    const [weather, characteristics, waterTemp] = await Promise.all([
-      fetchWeatherForCatch(location.latitude, location.longitude, timestamp).catch((e) => {
-        console.warn('[enrichCatch] weather fetch failed:', e);
-        return null;
-      }),
-      fetchSpotCharacteristics(lakeId, location).catch((e) => {
-        console.warn('[enrichCatch] spot characteristics fetch failed:', e);
-        return null;
-      }),
-      fetchWaterTempNearAt(location.latitude, location.longitude, timestamp, lakeUsgsStationId).catch((e) => {
-        console.warn('[enrichCatch] water temp fetch failed:', e);
-        return null;
-      }),
-    ]);
-
-    const moon = getMoonPhase(timestamp);
-    const solunar = getSolunarWindows(timestamp, location.latitude, location.longitude);
-    const feedingStatus = isInFeedingWindow(timestamp, solunar.windows);
-
-    const updates: Record<string, unknown> = {
-      solunar: { period: feedingStatus.period, minutesToWindow: feedingStatus.minutesToWindow },
-    };
-
-    if (weather) {
-      updates.weather = {
-        ...weather,
-        moon_phase: moon.phase,
-        water_temp_f: waterTemp?.temp_f ?? null,
-      };
-    }
-    if (characteristics) {
-      updates.characteristics = characteristics;
-    }
-
-    console.log('[enrichCatch] FETCH RESULTS', catchId, {
-      timestamp: timestamp.toISOString(),
-      airTempF: weather?.temp_f ?? 'NO WEATHER',
-      windMph: weather?.wind_speed_mph,
-      windDeg: weather?.wind_direction_deg,
-      pressureHpa: weather?.pressure_hpa,
-      pressureTrend: weather?.pressure_trend,
-      condition: weather?.condition,
-      cloudPct: weather?.cloud_cover_pct,
-      precipIn: weather?.precipitation_in,
-      waterTempF: waterTemp?.temp_f ?? 'NO WATER TEMP',
-      waterTempStation: waterTemp?.stationName,
-      waterTempReadingTime: waterTemp?.timestamp?.toISOString(),
-      moonPhase: moon.phase,
-      solunarPeriod: feedingStatus.period,
-      depthFt: characteristics?.depth_ft,
-      structure: characteristics?.nearestStructureType,
-    });
-
-    await updateDoc(catchRef, updates);
-    console.log('[enrichCatch] WROTE', catchId, 'fields:', Object.keys(updates));
+    await enrichCatchById(lakeId, catchId, location, timestamp, lakeUsgsStationId);
   } catch (err) {
     console.error('[enrichCatch] failed:', err);
   }

@@ -18,6 +18,7 @@ const LABELS: Record<keyof PatternWeights, string> = {
   timeOfDay: 'Time of Day',
   season: 'Season',
   moonPhase: 'Moon Phase',
+  waterTemp: 'Water Temp',
 };
 
 export function WeightSliders({ weights, onChange }: WeightSlidersProps) {

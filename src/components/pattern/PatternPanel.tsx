@@ -59,10 +59,18 @@ export function PatternPanel({
     return null;
   }, [grid, catchData.location]);
 
+  // Reference catch's water temp (snapshotted at log time). If null, fall
+  // back to today's lake temp so the dim doesn't penalize older catches.
+  const candidateWaterTempF = currentWeather?.water_temp_f ?? null;
+  const refWaterTempF = catchData.weather?.water_temp_f ?? candidateWaterTempF;
+
   const referenceSignature = useMemo(() => {
     if (originCell) {
       const depthChangeLookup = computeDepthChangeLookup(grid);
-      return buildCellSignature(originCell, windDeg, timestamp, moon.illumination, ranges, depthChangeLookup);
+      return buildCellSignature(
+        originCell, windDeg, timestamp, moon.illumination, ranges, depthChangeLookup,
+        /* sunriseHour */ 6, /* sunsetHour */ 19, refWaterTempF,
+      );
     }
     const chars = catchData.characteristics;
     return buildSignature(
@@ -76,8 +84,13 @@ export function PatternPanel({
       timestamp,
       moon.illumination,
       ranges,
+      /* depthChange_ft */ 0,
+      /* windAdvantage */ 0.5,
+      /* sunriseHour */ 6,
+      /* sunsetHour */ 19,
+      refWaterTempF,
     );
-  }, [originCell, catchData, grid, windDeg, ranges, timestamp, moon.illumination]);
+  }, [originCell, catchData, grid, windDeg, ranges, timestamp, moon.illumination, refWaterTempF]);
 
   const results = useMemo(() => {
     if (grid.length === 0) return [];
@@ -93,9 +106,10 @@ export function PatternPanel({
       {
         originCellId: originCell?.id ?? null,
         referenceTimestamp: timestamp,
+        candidateWaterTempF,
       },
     );
-  }, [referenceSignature, originCell, grid, windDeg, timestamp, moon.illumination, ranges, weights, threshold]);
+  }, [referenceSignature, originCell, grid, windDeg, timestamp, moon.illumination, ranges, weights, threshold, candidateWaterTempF]);
 
   // Propagate results to parent — use ref to avoid infinite loops
   const prevResultsKey = useRef('');

@@ -203,6 +203,13 @@ export function TripPlanPanel({
     // also rebuilds it internally, but that's a cheap O(n) walk.
     const depthChangeLookup = computeDepthChangeLookup(grid);
 
+    // Today's lake water temp drives the candidate signature's waterTemp dim
+    // (every cell shares one lake-wide reading). Reference catch's recorded
+    // temp drives the reference dim; if missing, fall back to today's so the
+    // dim contributes 0 distance instead of a spurious penalty.
+    const candidateWaterTempF = focusedHourData.rep.water_temp_f ?? null;
+    const refWaterTempF = patternCatch?.weather?.water_temp_f ?? candidateWaterTempF;
+
     let refSig: SpotSignature;
     let originCellId: number | null = null;
     let referenceTimestamp: Date = focusedHourData.date;
@@ -235,9 +242,10 @@ export function TripPlanPanel({
           if (!cell) continue;
           const ts = c.timestamp?.toDate?.() ?? selectedDay;
           const wind = c.weather?.wind_direction_deg ?? focusedHourData.rep.wind_direction_deg;
+          const ensembleTemp = c.weather?.water_temp_f ?? candidateWaterTempF;
           const sig = buildCellSignature(
             cell, wind, ts, dayInfo.moonIllumination, ranges, depthChangeLookup,
-            sunriseHour, sunsetHour,
+            sunriseHour, sunsetHour, ensembleTemp,
           );
           sigs.push({ sig, weight: Math.max(0.1, match.score) });
         }
@@ -250,19 +258,19 @@ export function TripPlanPanel({
           refSig = buildCellSignature(
             nearest, focusedHourData.rep.wind_direction_deg, catchTs,
             dayInfo.moonIllumination, ranges, depthChangeLookup,
-            sunriseHour, sunsetHour,
+            sunriseHour, sunsetHour, refWaterTempF,
           );
         } else {
-          refSig = signatureFromCatch(patternCatch, catchTs, dayInfo.moonIllumination, ranges, sunriseHour, sunsetHour);
+          refSig = signatureFromCatch(patternCatch, catchTs, dayInfo.moonIllumination, ranges, sunriseHour, sunsetHour, refWaterTempF);
         }
       } else if (nearest) {
         refSig = buildCellSignature(
           nearest, focusedHourData.rep.wind_direction_deg, catchTs,
           dayInfo.moonIllumination, ranges, depthChangeLookup,
-          sunriseHour, sunsetHour,
+          sunriseHour, sunsetHour, refWaterTempF,
         );
       } else {
-        refSig = signatureFromCatch(patternCatch, catchTs, dayInfo.moonIllumination, ranges, sunriseHour, sunsetHour);
+        refSig = signatureFromCatch(patternCatch, catchTs, dayInfo.moonIllumination, ranges, sunriseHour, sunsetHour, refWaterTempF);
       }
     } else {
       refSig = defaultSignatureFor(
@@ -302,6 +310,7 @@ export function TripPlanPanel({
         referenceTimestamp,
         sunriseHour,
         sunsetHour,
+        candidateWaterTempF,
       },
     );
     setResults(matches);
@@ -805,6 +814,7 @@ function signatureFromCatch(
   ranges: ReturnType<typeof computeNormRanges>,
   sunriseHour: number = 6,
   sunsetHour: number = 19,
+  waterTempF: number | null = null,
 ) {
   const chars = c.characteristics;
   return buildSignature(
@@ -822,6 +832,7 @@ function signatureFromCatch(
     /* windAdvantage */ 0.5,
     sunriseHour,
     sunsetHour,
+    c.weather?.water_temp_f ?? waterTempF,
   );
 }
 
@@ -832,7 +843,7 @@ function averageSignatures(items: { sig: SpotSignature; weight: number }[]): Spo
   const dims: (keyof SpotSignature)[] = [
     'depth', 'depthChange', 'slope', 'dropoffProximity', 'channelProximity',
     'pointProximity', 'shorelineDistance', 'windExposure', 'windAdvantage',
-    'timeOfDay', 'season', 'moonPhase',
+    'timeOfDay', 'season', 'moonPhase', 'waterTemp',
   ];
   const totalW = items.reduce((s, x) => s + x.weight, 0) || 1;
   const out = {} as SpotSignature;

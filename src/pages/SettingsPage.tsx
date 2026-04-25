@@ -1,9 +1,37 @@
+import { useState } from 'react';
 import { useAppStore } from '../store';
 import { auth } from '../services/firebase';
+import { useCatches } from '../hooks/useCatches';
+import { backfillCatches, type BackfillProgress, type BackfillSummary } from '../services/catchBackfill';
 
 export function SettingsPage() {
   const { selectedLake, setIsAuthenticated } = useAppStore();
   const user = auth.currentUser;
+  const { catches } = useCatches(selectedLake?.id ?? null);
+
+  const [backfillRunning, setBackfillRunning] = useState(false);
+  const [backfillProgress, setBackfillProgress] = useState<BackfillProgress | null>(null);
+  const [backfillSummary, setBackfillSummary] = useState<BackfillSummary | null>(null);
+
+  const handleBackfill = async () => {
+    if (!selectedLake || backfillRunning) return;
+    setBackfillRunning(true);
+    setBackfillSummary(null);
+    setBackfillProgress(null);
+    try {
+      const summary = await backfillCatches(
+        selectedLake.id,
+        selectedLake.usgsStationId,
+        catches,
+        (p) => setBackfillProgress(p),
+      );
+      setBackfillSummary(summary);
+    } finally {
+      setBackfillRunning(false);
+    }
+  };
+
+  const missingCount = catches.filter((c) => !c.weather || c.weather.water_temp_f == null).length;
 
   return (
     <div className="page page-top">
@@ -72,6 +100,40 @@ export function SettingsPage() {
         >
           Sign Out
         </button>
+      </div>
+
+      <div className="section">
+        <div className="section-header">
+          <div className="eyebrow">Data</div>
+        </div>
+        <div className="card">
+          <Row label="Catches in lake" value={String(catches.length)} />
+          <div className="divider" />
+          <Row label="Missing conditions" value={String(missingCount)} />
+        </div>
+        <button
+          className="btn btn-secondary btn-block"
+          style={{ marginTop: 12 }}
+          onClick={handleBackfill}
+          disabled={!selectedLake || backfillRunning || missingCount === 0}
+        >
+          {backfillRunning
+            ? `Backfilling… ${backfillProgress?.processed ?? 0} / ${backfillProgress?.total ?? 0}`
+            : missingCount === 0
+              ? 'All catches enriched'
+              : `Backfill ${missingCount} catch${missingCount === 1 ? '' : 'es'}`}
+        </button>
+        {backfillSummary && (
+          <div className="card" style={{ marginTop: 8 }}>
+            <Row label="Full enriched" value={String(backfillSummary.fullEnriched)} />
+            <div className="divider" />
+            <Row label="Water temp only" value={String(backfillSummary.waterTempOnly)} />
+            <div className="divider" />
+            <Row label="Unresolved" value={String(backfillSummary.unresolved)} />
+            <div className="divider" />
+            <Row label="Duration" value={`${(backfillSummary.durationMs / 1000).toFixed(1)}s`} />
+          </div>
+        )}
       </div>
 
       <div className="section">

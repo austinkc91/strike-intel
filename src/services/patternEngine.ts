@@ -21,6 +21,7 @@ export interface SpotSignature {
   timeOfDay: number;          // 0-1
   season: number;             // 0-1
   moonPhase: number;          // 0-1 (illumination)
+  waterTemp: number;          // 0-1 normalized over 30–100°F band
 }
 
 export interface PatternWeights {
@@ -36,6 +37,7 @@ export interface PatternWeights {
   timeOfDay: number;
   season: number;
   moonPhase: number;
+  waterTemp: number;
 }
 
 export const DEFAULT_WEIGHTS: PatternWeights = {
@@ -51,7 +53,16 @@ export const DEFAULT_WEIGHTS: PatternWeights = {
   timeOfDay: 0.3,
   season: 0.5,
   moonPhase: 0.2,
+  waterTemp: 0.7,
 };
+
+// Map raw °F into the SpotSignature 0–1 band. Range covers winter ice-out
+// through extreme summer surface temps; clamps so bad readings don't blow up
+// the euclidean distance.
+export function normalizeWaterTemp(tempF: number | null | undefined): number {
+  if (tempF == null || !Number.isFinite(tempF)) return 0.5;
+  return Math.min(1, Math.max(0, (tempF - 30) / 70));
+}
 
 // ============================================================
 // Species-specific weight profiles
@@ -68,6 +79,7 @@ export const SPECIES_WEIGHTS: Record<string, Partial<PatternWeights>> = {
     shorelineDistance: 0.7,
     windExposure: 0.5,
     windAdvantage: 0.8,
+    waterTemp: 0.7,
   },
   'Smallmouth Bass': {
     depth: 0.9,
@@ -79,6 +91,7 @@ export const SPECIES_WEIGHTS: Record<string, Partial<PatternWeights>> = {
     shorelineDistance: 0.5,
     windExposure: 0.6,
     windAdvantage: 0.7,
+    waterTemp: 0.9,
   },
   'Striped Bass': {
     depth: 1.0,
@@ -90,6 +103,7 @@ export const SPECIES_WEIGHTS: Record<string, Partial<PatternWeights>> = {
     shorelineDistance: 0.2,
     windExposure: 0.8,
     windAdvantage: 0.6,
+    waterTemp: 0.9,
   },
   'Walleye': {
     depth: 1.0,
@@ -101,6 +115,7 @@ export const SPECIES_WEIGHTS: Record<string, Partial<PatternWeights>> = {
     shorelineDistance: 0.3,
     windExposure: 0.7,
     windAdvantage: 0.8,
+    waterTemp: 0.9,
   },
   'Crappie': {
     depth: 0.9,
@@ -112,6 +127,7 @@ export const SPECIES_WEIGHTS: Record<string, Partial<PatternWeights>> = {
     shorelineDistance: 0.6,
     windExposure: 0.3,
     windAdvantage: 0.4,
+    waterTemp: 0.8,
   },
   'Channel Catfish': {
     depth: 0.8,
@@ -123,6 +139,7 @@ export const SPECIES_WEIGHTS: Record<string, Partial<PatternWeights>> = {
     shorelineDistance: 0.3,
     windExposure: 0.4,
     windAdvantage: 0.3,
+    waterTemp: 0.5,
   },
   'Bluegill': {
     depth: 0.6,
@@ -134,6 +151,7 @@ export const SPECIES_WEIGHTS: Record<string, Partial<PatternWeights>> = {
     shorelineDistance: 0.9,
     windExposure: 0.3,
     windAdvantage: 0.5,
+    waterTemp: 0.5,
   },
 };
 
@@ -342,6 +360,7 @@ export function buildSignature(
   windAdvantage: number = 0.5,
   sunriseHour: number = 6,
   sunsetHour: number = 19,
+  waterTempF: number | null = null,
 ): SpotSignature {
   return {
     depth: normalize(depth_ft, ranges.maxDepth),
@@ -356,6 +375,7 @@ export function buildSignature(
     timeOfDay: crepuscularTimeNorm(timestamp, sunriseHour, sunsetHour),
     season: seasonNorm(timestamp),
     moonPhase: moonIllumination,
+    waterTemp: normalizeWaterTemp(waterTempF),
   };
 }
 
@@ -368,6 +388,7 @@ export function buildCellSignature(
   depthChangeLookup: Map<number, number>,
   sunriseHour: number = 6,
   sunsetHour: number = 19,
+  waterTempF: number | null = null,
 ): SpotSignature {
   const windExp = getWindExposureForDirection(windDeg, cell.windExposure8);
   const depthChange = depthChangeLookup.get(cell.id) ?? 0;
@@ -392,6 +413,7 @@ export function buildCellSignature(
     timeOfDay: crepuscularTimeNorm(timestamp, sunriseHour, sunsetHour),
     season: seasonNorm(timestamp),
     moonPhase: moonIllumination,
+    waterTemp: normalizeWaterTemp(waterTempF),
   };
 }
 
@@ -407,7 +429,7 @@ export function similarityScore(
   const dims: (keyof SpotSignature)[] = [
     'depth', 'depthChange', 'slope', 'dropoffProximity', 'channelProximity',
     'pointProximity', 'shorelineDistance', 'windExposure', 'windAdvantage',
-    'timeOfDay', 'season', 'moonPhase',
+    'timeOfDay', 'season', 'moonPhase', 'waterTemp',
   ];
 
   let sumSquared = 0;
@@ -468,6 +490,12 @@ export interface FindSimilarSpotsOptions {
   referenceTimestamp?: Date;
   sunriseHour?: number;
   sunsetHour?: number;
+  /** Today's lake water temperature in °F. All grid cells share the same
+   *  reading since USGS gives one lake-wide value. When the reference
+   *  catch's recorded temp differs from this, the waterTemp dimension
+   *  uniformly penalizes every cell — exactly what we want when claiming
+   *  a catch's spatial pattern transfers to today. */
+  candidateWaterTempF?: number | null;
 }
 
 export function findSimilarSpots(
@@ -486,6 +514,7 @@ export function findSimilarSpots(
   const sunriseHour = options.sunriseHour ?? 6;
   const sunsetHour = options.sunsetHour ?? 19;
   const refTs = options.referenceTimestamp ?? timestamp;
+  const candidateWaterTempF = options.candidateWaterTempF ?? null;
 
   // Symmetric depth-time shift: scale the reference depth dim by the ratio
   // of expected fish-depth at the search hour vs the reference hour. Fish
@@ -509,7 +538,7 @@ export function findSimilarSpots(
   for (const cell of fishableCells) {
     const cellSig = buildCellSignature(
       cell, windDeg, timestamp, moonIllumination, ranges, depthChangeLookup,
-      sunriseHour, sunsetHour,
+      sunriseHour, sunsetHour, candidateWaterTempF,
     );
     const score = similarityScore(adjustedRef, cellSig, weights);
 
@@ -717,5 +746,8 @@ export function defaultSignatureFor(
     ranges,
     /* depthChange_ft */ 4, // mid-range structure transition
     seed.windAdvantage,
+    /* sunriseHour */ undefined,
+    /* sunsetHour */ undefined,
+    conditions.waterTempF,
   );
 }
